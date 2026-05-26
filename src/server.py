@@ -4,7 +4,10 @@ Open WebUI から使えるOpenAI互換APIサーバー
 """
 import time
 import uuid
+import logging
 from pathlib import Path
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 
 import chromadb
 from fastapi import FastAPI
@@ -62,7 +65,17 @@ def chat_completions(req: ChatRequest):
     user_message = next(
         (m.content for m in reversed(req.messages) if m.role == "user"), ""
     )
+
+    logging.info(f"[1] Open WebUI からリクエスト受信: 「{user_message}」")
+    logging.info(f"[2] LlamaIndex に質問を渡す")
+
+    t0 = time.time()
     response = query_engine.query(user_message)
+    elapsed = time.time() - t0
+
+    logging.info(f"[3] ChromaDB で関連情報を検索 → Ollama で回答生成")
+    logging.info(f"[4] 回答完了（{elapsed:.1f}秒）: 「{str(response)[:80]}...」")
+
     answer = str(response)
 
     if req.stream:
