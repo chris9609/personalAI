@@ -5,3 +5,8 @@ __pycache__/
 
 # Google認証情報（絶対にコミットしない）
 secrets/
+
+# 個人用ドキュメント（リポジトリに含めない）
+data/
+WORKLOG.md
+personalAI.md
