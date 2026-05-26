@@ -1,0 +1,26 @@
+services:
+  server:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: always
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    ports:
+      - "8080:8080"
+    environment:
+      - OPENAI_API_BASE_URL=http://server:8000/v1
+      - OPENAI_API_KEY=dummy
+    volumes:
+      - open-webui:/app/backend/data
+    depends_on:
+      - server
+    restart: always
+
+volumes:
+  open-webui:
