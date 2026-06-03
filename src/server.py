@@ -7,6 +7,7 @@ import json
 import time
 import uuid
 import logging
+from datetime import date
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
@@ -20,12 +21,17 @@ from llama_index.core import VectorStoreIndex, Settings
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.llms.ollama import Ollama
+from src.weather_fetch import get_location, get_weather
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CHROMA_DIR = str(BASE_DIR / "chroma_db")
+SECRETS_DIR = BASE_DIR / "secrets"
 COLLECTION_NAME = "personal_rag"
 LLM_MODEL = "gemma4:e4b"
 OLLAMA_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+
+# 天気情報のキャッシュ（1日1回だけ取得）
+_weather_cache: dict = {"date": None, "info": None}
 
 app = FastAPI()
 
@@ -62,7 +68,7 @@ def list_models():
         "object": "list",
         "data": [
             {
-                "id": LLM_MODEL,
+                "id": "personal-ai",
                 "object": "model",
                 "created": 1700000000,
                 "owned_by": "ollama",
@@ -71,15 +77,19 @@ def list_models():
     }
 
 
-def _stream_ollama(prompt: str, req: ChatRequest):
+def _stream_ollama(prompt: str, req: ChatRequest, system: str | None = None):
     """Ollamaにストリーミングで投げてServer-Sent Eventsとして流す"""
     chunk_id = f"chatcmpl-{uuid.uuid4().hex}"
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
 
     def generate():
         with httpx.Client(timeout=120) as client:
             with client.stream("POST", f"{OLLAMA_URL}/api/chat", json={
                 "model": LLM_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": messages,
                 "stream": True,
             }) as response:
                 for line in response.iter_lines():
@@ -99,6 +109,30 @@ def _stream_ollama(prompt: str, req: ChatRequest):
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
+def get_today_weather() -> str | None:
+    """今日の天気を返す。未取得なら API を叩いてキャッシュする。"""
+    try:
+        today = str(date.today())
+        if _weather_cache["date"] == today:
+            return _weather_cache["info"]
+
+        with open(SECRETS_DIR / "weather.json") as f:
+            api_keys = json.load(f)
+
+        lat, lon = get_location()
+        weather = get_weather(lat, lon, api_keys["openweathermap"])
+        city = weather.get("name", "")
+        info = f"{city}の天気は{weather['weather'][0]['description']}、気温{weather['main']['temp']}℃"
+
+        _weather_cache["date"] = today
+        _weather_cache["info"] = info
+        logging.info(f"[天気] 取得完了: {info}")
+        return info
+    except Exception as e:
+        logging.error(f"[天気] 取得失敗: {e}")
+        return None
+
+
 @app.post("/v1/chat/completions")
 def chat_completions(req: ChatRequest):
     user_message = next(
@@ -116,12 +150,18 @@ def chat_completions(req: ChatRequest):
     nodes = retriever.retrieve(user_message)
     context = "\n\n".join([node.get_content() for node in nodes])
 
+    weather_info = get_today_weather()
+    weather_prefix = f"【今日の天気】{weather_info}\n\n" if weather_info else ""
+    if weather_info:
+        logging.info(f"[天気] プロンプトに追加: {weather_info}")
+
     if context.strip():
         logging.info(f"[3] 関連情報あり → RAGプロンプトで Ollama にストリーミング")
-        prompt = f"以下の情報を参考に質問に答えてください。\n\n{context}\n\n質問: {user_message}"
+        prompt = f"{weather_prefix}参考情報:\n{context}\n\n質問: {user_message}"
     else:
         logging.info(f"[3] 関連情報なし → そのまま Ollama にストリーミング")
-        prompt = user_message
+        prompt = f"{weather_prefix}{user_message}"
 
     logging.info(f"[4] Ollama にストリーミング開始...")
+    logging.info(f"[prompt]\n{prompt}")
     return _stream_ollama(prompt, req)
