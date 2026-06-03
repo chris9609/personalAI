@@ -1,14 +1,16 @@
 """
 data/ 以下のMarkdownファイルをChromaDBに取り込むスクリプト
 """
+from pathlib import Path
 import chromadb
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, StorageContext
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.core import Settings
 
-DATA_DIR = "../data"
-CHROMA_DIR = "../chroma_db"
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = str(BASE_DIR / "data")
+CHROMA_DIR = str(BASE_DIR / "chroma_db")
 COLLECTION_NAME = "personal_rag"
 
 def main():
