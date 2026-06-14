@@ -49,7 +49,7 @@ chroma_client = chromadb.PersistentClient(path=CHROMA_DIR)
 collection = chroma_client.get_or_create_collection(COLLECTION_NAME)
 vector_store = ChromaVectorStore(chroma_collection=collection)
 index = VectorStoreIndex.from_vector_store(vector_store)
-retriever = index.as_retriever()
+retriever = index.as_retriever(similarity_top_k=4)
 
 
 class Message(BaseModel):
