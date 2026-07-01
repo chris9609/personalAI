@@ -31,7 +31,7 @@ def main(question: str):
     vector_store = ChromaVectorStore(chroma_collection=collection)
     index = VectorStoreIndex.from_vector_store(vector_store)
 
-    query_engine = index.as_query_engine()
+    query_engine = index.as_query_engine(similarity_top_k=4)
     response = query_engine.query(question)
     print(f"\n質問: {question}")
     print(f"回答: {response}\n")
