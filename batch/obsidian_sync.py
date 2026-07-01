@@ -14,6 +14,7 @@ iCloud上のObsidian vaultの .md を data/obsidian/ に同期するスクリプ
 ※ vault側で削除した .md の扱い（同期先・ChromaDBからの削除）は今後対応。
 """
 import shutil
+import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -40,7 +41,7 @@ def needs_copy(src: Path, dest: Path) -> bool:
 def main():
     if not VAULT_DIR.is_dir():
         print(f"vaultが見つかりません: {VAULT_DIR}")
-        return
+        sys.exit(1)
 
     DEST_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -56,6 +57,14 @@ def main():
             skipped += 1
 
     print(f"\n完了: {copied} 件コピー / {skipped} 件スキップ（変更なし）")
+
+    # 0件コピー+0件スキップ = vaultの中身が1つも見えていない。
+    # iCloudのアクセス拒否（TCC）や空vaultの可能性が高く、このまま後続の
+    # ingest を走らせるとRAGが古いまま静かに固定されるので失敗として止める。
+    if copied == 0 and skipped == 0:
+        print("エラー: ソースの .md が1件も見つかりませんでした（アクセス拒否 or 空vault の疑い）")
+        sys.exit(1)
+
     if copied:
         print("次に ingest.py を実行してChromaDBに取り込んでください。")
         print("  .venv/bin/python -m batch.ingest")
