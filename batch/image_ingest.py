@@ -26,11 +26,12 @@ OLLAMA_URL = "http://localhost:11434"
 MODEL = "gemma4:e4b"
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"}
 
-CONSOLIDATE_PROMPT = (
-    "これらは同じトピックに関連する複数の画像です。"
-    "画像群全体から読み取れる情報を、トピックごとにまとめて日本語で詳しく書き出してください。"
-    "重複情報は統合し、テキスト・数字・場所・連絡先・日付など読み取れる情報をすべて含めてください。"
-    "構造化されたMarkdown形式（見出し・箇条書き）で出力してください。"
+TRANSCRIBE_PROMPT = (
+    "これは取扱説明書などの文書の1ページの画像です。"
+    "このページに書かれているテキスト・数字・型番・連絡先・日付・表の内容を、"
+    "省略や要約をせず、できるだけ忠実にすべて日本語で書き出してください。"
+    "読み取れる情報のみを出力し、推測や補足は加えないでください。"
+    "見出し・箇条書き・表など元の構造を保ったMarkdown形式で出力してください。"
 )
 
 DESCRIBE_PROMPT = (
@@ -68,8 +69,15 @@ def generate(prompt: str, images_b64: list[str] | None = None, json_format: bool
 
 
 def images_to_text(image_paths: list[Path]) -> str:
-    imgs_b64 = [load_image_as_png_b64(p) for p in image_paths]
-    return generate(CONSOLIDATE_PROMPT, images_b64=imgs_b64)
+    # 連続した別ページなので、1枚ずつ忠実に文字起こししてファイル名順に連結する
+    # （全画像を1回の呼び出しに渡すとコンテキスト溢れ・切り詰めで内容が欠落するため）
+    ordered = sorted(image_paths)
+    parts = []
+    for i, p in enumerate(ordered, start=1):
+        text = generate(TRANSCRIBE_PROMPT, images_b64=[load_image_as_png_b64(p)]).strip()
+        parts.append(f"## ページ{i}（{p.name}）\n\n{text}")
+        print(f"    ページ {i}/{len(ordered)} 文字起こし完了: {p.name}")
+    return "\n\n".join(parts)
 
 
 def describe_image(image_path: Path) -> str:
