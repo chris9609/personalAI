@@ -35,7 +35,10 @@ def main():
         transformations=[SentenceSplitter(), Settings.embed_model],
         vector_store=vector_store,
         docstore=SimpleDocumentStore(),
-        docstore_strategy=DocstoreStrategy.UPSERTS,
+        # UPSERTS_AND_DELETE: 入力に存在しなくなったファイル（vaultで削除・移動・除外
+        # されたもの）をChromaDBからも削除する。カレンダーは別ルートで取り込んでおり
+        # このdocstoreに載っていないため影響を受けない
+        docstore_strategy=DocstoreStrategy.UPSERTS_AND_DELETE,
     )
 
     if (pipeline_dir / "docstore.json").exists():
