@@ -13,6 +13,7 @@ Slackのトークンは personal-mcp 側の .env を共有する（鍵の置き�
 使い方:
   .venv/bin/python -m batch.morning_briefing
 """
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -23,6 +24,9 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+
+# 天気はOpen WebUI用に作った既存モジュールを再利用する（現在地→OpenWeatherMap）
+from src.weather_fetch import get_location, get_weather
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -100,6 +104,21 @@ def format_events(events: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def fetch_weather_summary() -> str:
+    # 天気はおまけ情報なので、取れなくても注記だけでブリーフィング自体は続行する
+    try:
+        with open(BASE_DIR / "secrets" / "weather.json") as f:
+            api_key = json.load(f)["openweathermap"]
+        lat, lon = get_location()
+        w = get_weather(lat, lon, api_key)
+        desc = w["weather"][0]["description"]
+        temp = round(w["main"]["temp"])
+        feels = round(w["main"]["feels_like"])
+        return f"{desc}・{temp}℃（体感 {feels}℃）"
+    except Exception:
+        return "（天気の取得に失敗しました）"
+
+
 def fetch_anki_summary() -> str:
     # Ankiが起動していないのは朝として普通の状態なので、エラーにはしない
     def count(query: str) -> int:
@@ -144,9 +163,12 @@ def main() -> int:
         events_text = f"⚠️ カレンダーの取得に失敗しました: {e}"
 
     anki_text = fetch_anki_summary()
+    weather_text = fetch_weather_summary()
 
     message = (
         f"☀️ おはようございます。*{date_str}* のブリーフィングです\n"
+        f"\n"
+        f"🌤 *天気*\n{weather_text}\n"
         f"\n"
         f"📅 *今日の予定*\n{events_text}\n"
         f"\n"
