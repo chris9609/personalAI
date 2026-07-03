@@ -339,7 +339,9 @@ def main() -> int:
 
         replied = process_new_messages(token, state, messages, bot_user_id, anki_up)
         carded = process_pins(token, state, messages, anki_up)
-        print(f"完了: 返信 {replied} 件 / カード化 {carded} 件（Anki {'起動中' if anki_up else '未起動'}）")
+        # 毎分実行なので、何もなかった回はログを汚さない（動きがあった回だけ記録する）
+        if replied or carded:
+            print(f"完了: 返信 {replied} 件 / カード化 {carded} 件（Anki {'起動中' if anki_up else '未起動'}）")
         return 0
     except Exception as e:
         traceback.print_exc()
