@@ -22,6 +22,7 @@ pillow_heif.register_heif_opener()
 BASE_DIR = Path(__file__).resolve().parent.parent
 SCREENSHOTS_DIR = BASE_DIR / "data" / "screenshots" / "HEIC"
 OUTPUT_DIR = BASE_DIR / "data" / "screenshots" / "MD"
+PROCESSED_MANIFEST = OUTPUT_DIR / ".processed.json"
 OLLAMA_URL = "http://localhost:11434"
 MODEL = "gemma4:e4b"
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"}
@@ -85,6 +86,19 @@ def describe_image(image_path: Path) -> str:
     return generate(DESCRIBE_PROMPT, images_b64=[img_b64]).strip()
 
 
+def load_processed() -> dict[str, str]:
+    # 処理済み画像の記録（ファイル名 → 取り込み先トピック）。毎晩の全枚数LLM再分析を防ぐ
+    if PROCESSED_MANIFEST.exists():
+        return json.loads(PROCESSED_MANIFEST.read_text(encoding="utf-8"))
+    return {}
+
+
+def save_processed(processed: dict[str, str]) -> None:
+    PROCESSED_MANIFEST.write_text(
+        json.dumps(processed, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
 def sanitize_topic(name: str) -> str:
     # ファイル名として使えない文字・空白だけをアンダースコアに置換し、日本語はそのまま活かす
     name = re.sub(r'[\\/:*?"<>|\s]+', "_", name.strip()).strip("_")
@@ -114,7 +128,12 @@ def group_images(images: list[Path]) -> dict[str, list[Path]]:
         topic = sanitize_topic(str(topic))
         valid = []
         for idx in indices:
-            if not isinstance(idx, int) or not (0 <= idx < len(images)) or idx in seen_indices:
+            # モデルが番号を文字列（"0"等）で返すことがあるためintへキャスト許容
+            try:
+                idx = int(idx)
+            except (TypeError, ValueError):
+                continue
+            if not (0 <= idx < len(images)) or idx in seen_indices:
                 continue
             seen_indices.add(idx)
             valid.append(images[idx])
@@ -132,23 +151,37 @@ def group_images(images: list[Path]) -> dict[str, list[Path]]:
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    images = sorted([p for p in SCREENSHOTS_DIR.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS])
-    if not images:
+    all_images = sorted([p for p in SCREENSHOTS_DIR.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS])
+    if not all_images:
         print(f"画像が見つかりません。{SCREENSHOTS_DIR} に画像を入れてください。")
         return
+
+    processed = load_processed()
+    images = [p for p in all_images if p.name not in processed]
+    if not images:
+        print(f"新規画像はありません（処理済み {len(all_images)} 枚）。")
+        return
+    print(f"新規 {len(images)} 枚を処理します（処理済み {len(all_images) - len(images)} 枚はスキップ）。")
 
     groups = group_images(images)
 
     for topic, imgs in groups.items():
         out_md = OUTPUT_DIR / f"{topic}.md"
-        if out_md.exists():
-            print(f"[SKIP] {topic} (既に生成済み: {out_md.name})")
-            continue
 
         print(f"[処理中] {topic} ({len(imgs)} 枚) ...")
         text = images_to_text(imgs)
-        out_md.write_text(f"# {topic}\n\n{text}\n", encoding="utf-8")
-        print(f"[完了] → {out_md.name}")
+        if out_md.exists():
+            # 既存トピックに合流した新規画像は末尾に追記する（スキップすると文字起こしが失われるため）
+            with out_md.open("a", encoding="utf-8") as f:
+                f.write(f"\n\n{text}\n")
+            print(f"[追記] → {out_md.name}")
+        else:
+            out_md.write_text(f"# {topic}\n\n{text}\n", encoding="utf-8")
+            print(f"[完了] → {out_md.name}")
+
+        for p in imgs:
+            processed[p.name] = topic
+        save_processed(processed)
 
     print("\n完了！次に ingest.py を実行してChromaDBに取り込んでください。")
     print("  .venv/bin/python -m batch.ingest")
