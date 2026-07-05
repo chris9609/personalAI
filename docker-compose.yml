@@ -24,5 +24,24 @@ services:
       - server
     restart: always
 
+  # MCPサーバー(personal-mcp)をOpen WebUIから使うための変換アダプタ。
+  # ポートを公開していないので、届くのはDocker内部のopen-webuiからだけ
+  # (URL: http://mcpo:8600)。外の世界やTailscaleからは直接触れない。
+  mcpo:
+    build:
+      context: ../MCP
+      dockerfile: Dockerfile.mcpo
+    command: mcpo --host 0.0.0.0 --port 8600 -- node /mcp/build/index.js
+    environment:
+      # 小型モデル(gemma)が迷わないよう、まずはカレンダー2ツールだけ見せる。
+      # 武器を増やすときはここを "gcal,anki" のように編集して再起動
+      - TOOLS=gcal
+    volumes:
+      - ../MCP:/mcp:ro
+      # コードは homedir 基準でトークンを探すので、コンテナ内ホーム(/root)配下の
+      # 同じ相対位置にsecretsを見せる（Mac側と地図を合わせる）
+      - ./secrets:/root/claude/application/personalAI/secrets:ro
+    restart: always
+
 volumes:
   open-webui:
