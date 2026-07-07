@@ -63,7 +63,8 @@ vector_store = ChromaVectorStore(chroma_collection=collection)
 index = VectorStoreIndex.from_vector_store(vector_store)
 retriever = index.as_retriever(similarity_top_k=4)
 
-llm = ChatOllama(model=LLM_MODEL, base_url=OLLAMA_URL)
+# temperature=0: 道具を使うか否かの判断がランダムにブレないようにする
+llm = ChatOllama(model=LLM_MODEL, base_url=OLLAMA_URL, temperature=0)
 
 
 class Message(BaseModel):
@@ -197,6 +198,8 @@ def build_system_prompt() -> str:
         "道具の使い方:\n"
         "- ユーザーのノートやメモ・過去の記録に関する質問には note_search を使う\n"
         "- カレンダーの予定の追加・確認・変更・削除には calendar_* の道具を使う\n"
+        "- 重要: カレンダーを操作するときは、必ず該当する道具を実際に呼び出すこと。"
+        "道具を呼ばずに「追加しました」「変更しました」「削除しました」と答えることは絶対に禁止\n"
         "- 削除・変更で候補が複数返ってきたら、勝手に選ばずユーザーに確認する\n"
         "- 道具の結果を踏まえて、最後は必ず自然な日本語で答える\n"
         "- 道具が不要な雑談や一般的な質問には、道具を使わずそのまま答える"
