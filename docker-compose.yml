@@ -5,10 +5,15 @@ services:
       - "8000:8000"
     environment:
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      # エージェントの道具はmcpo(Docker内線)経由で呼ぶ
+      - MCPO_BASE_URL=http://mcpo:8600
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./secrets:/app/secrets:ro
+      # 夜間バッチ(ホスト側)が更新したRAGデータをそのまま読む。
+      # ChromaDBはsqlite書き込みがあるためro指定はしない
+      - ./chroma_db:/app/chroma_db
     restart: always
 
   open-webui:

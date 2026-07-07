@@ -1,13 +1,19 @@
 """
-Open WebUI から使えるOpenAI互換APIサーバー
+Open WebUI から使えるOpenAI互換APIサーバー（LangGraphエージェント版）
 起動: uvicorn src.server:app --host 0.0.0.0 --port 8000
+
+構成:
+  Open WebUI → このサーバー → LangGraphエージェント(gemma)
+                                ├─ note_search（LlamaIndex RAG: ノート・画像・カレンダー取り込みデータ）
+                                └─ calendar_*（mcpo経由でpersonal-mcpのツールを呼ぶ。起動時にopenapi.jsonから自動生成）
+エージェントが「そのまま答える or 道具を使う」を判断し、道具の結果を踏まえて回答する。
+会話履歴と今日の日付はシステムプロンプトで毎回渡す（旧版は最後の1メッセージしか見ていなかった）。
 """
 import os
 import json
-import time
 import uuid
 import logging
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
@@ -16,11 +22,20 @@ import httpx
 import chromadb
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, create_model
 from llama_index.core import VectorStoreIndex, Settings
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.embeddings.ollama import OllamaEmbedding
-from llama_index.llms.ollama import Ollama
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import StructuredTool
+from langchain_ollama import ChatOllama
+
+# LangChain 1.x では create_agent、それ以前は langgraph 側の create_react_agent
+try:
+    from langchain.agents import create_agent
+except ImportError:
+    from langgraph.prebuilt import create_react_agent as create_agent
+
 from src.weather_fetch import get_location, get_weather
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -29,27 +44,26 @@ SECRETS_DIR = BASE_DIR / "secrets"
 COLLECTION_NAME = "personal_rag"
 LLM_MODEL = "gemma4:e4b"
 OLLAMA_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+MCPO_URL = os.environ.get("MCPO_BASE_URL", "http://mcpo:8600")
+MAX_HISTORY = 20  # gemmaのコンテキスト溢れ防止。直近20メッセージだけ渡す
 
 # 天気情報のキャッシュ（1日1回だけ取得）
 _weather_cache: dict = {"date": None, "info": None}
 
 app = FastAPI()
 
-# 起動時に一度だけ初期化
+# 起動時に一度だけ初期化（RAGの検索は埋め込みモデルだけあればよい）
 Settings.embed_model = OllamaEmbedding(
     model_name="nomic-embed-text",
     base_url=OLLAMA_URL,
-)
-Settings.llm = Ollama(
-    model=LLM_MODEL,
-    base_url=OLLAMA_URL,
-    request_timeout=120.0,
 )
 chroma_client = chromadb.PersistentClient(path=CHROMA_DIR)
 collection = chroma_client.get_or_create_collection(COLLECTION_NAME)
 vector_store = ChromaVectorStore(chroma_collection=collection)
 index = VectorStoreIndex.from_vector_store(vector_store)
 retriever = index.as_retriever(similarity_top_k=4)
+
+llm = ChatOllama(model=LLM_MODEL, base_url=OLLAMA_URL)
 
 
 class Message(BaseModel):
@@ -62,51 +76,146 @@ class ChatRequest(BaseModel):
     stream: bool = False
 
 
-@app.get("/v1/models")
-def list_models():
-    return {
-        "object": "list",
-        "data": [
-            {
-                "id": "personal-ai",
-                "object": "model",
-                "created": 1700000000,
-                "owned_by": "ollama",
-            }
-        ],
-    }
+# ---------------------------------------------------------------------------
+# エージェントの道具
+# ---------------------------------------------------------------------------
+
+def note_search(query: str) -> str:
+    """ユーザーの個人データを検索する"""
+    nodes = retriever.retrieve(query)
+    if not nodes:
+        return "関連する情報は見つかりませんでした。"
+    return "\n\n".join(node.get_content() for node in nodes)
 
 
-def _stream_ollama(prompt: str, req: ChatRequest, system: str | None = None):
-    """Ollamaにストリーミングで投げてServer-Sent Eventsとして流す"""
-    chunk_id = f"chatcmpl-{uuid.uuid4().hex}"
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
+NOTE_SEARCH_TOOL = StructuredTool.from_function(
+    func=note_search,
+    name="note_search",
+    description=(
+        "ユーザーの個人データ（Obsidianのノート・保存した画像の内容・カレンダーの予定の記録）から"
+        "関連情報を検索する。ユーザー自身のメモ・記録・過去の予定に関する質問で使う"
+    ),
+)
 
-    def generate():
-        with httpx.Client(timeout=120) as client:
-            with client.stream("POST", f"{OLLAMA_URL}/api/chat", json={
-                "model": LLM_MODEL,
-                "messages": messages,
-                "stream": True,
-            }) as response:
-                for line in response.iter_lines():
-                    if not line:
-                        continue
-                    data = json.loads(line)
-                    content = data.get("message", {}).get("content", "")
-                    if content:
-                        chunk = {
-                            "id": chunk_id,
-                            "object": "chat.completion.chunk",
-                            "choices": [{"delta": {"content": content}, "index": 0, "finish_reason": None}],
-                        }
-                        yield f"data: {json.dumps(chunk)}\n\n"
-        yield "data: [DONE]\n\n"
+_JSON_TYPES = {"string": str, "number": float, "integer": int, "boolean": bool}
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+
+def fetch_mcpo_tools() -> list[StructuredTool]:
+    """mcpoのopenapi.jsonを読んで、公開中のツールをLangChainの道具として自動生成する。
+    mcpo側のTOOLS設定を変えてもこのコードは修正不要。"""
+    spec = httpx.get(f"{MCPO_URL}/openapi.json", timeout=10).json()
+    schemas = spec.get("components", {}).get("schemas", {})
+    tools: list[StructuredTool] = []
+    for path, methods in spec.get("paths", {}).items():
+        post = methods.get("post")
+        if not post:
+            continue
+        name = path.lstrip("/")
+        description = (post.get("description") or post.get("summary") or name).strip()
+
+        body = (
+            post.get("requestBody", {})
+            .get("content", {})
+            .get("application/json", {})
+            .get("schema", {})
+        )
+        if "$ref" in body:
+            body = schemas.get(body["$ref"].split("/")[-1], {})
+        required = set(body.get("required", []))
+        fields = {}
+        for prop_name, prop in body.get("properties", {}).items():
+            py_type = _JSON_TYPES.get(prop.get("type"), str)
+            desc = prop.get("description", "")
+            if prop_name in required:
+                fields[prop_name] = (py_type, Field(description=desc))
+            else:
+                fields[prop_name] = (py_type | None, Field(default=None, description=desc))
+        args_schema = create_model(f"{name}_args", **fields)
+
+        def make_caller(tool_name: str):
+            def call(**kwargs) -> str:
+                payload = {k: v for k, v in kwargs.items() if v is not None}
+                try:
+                    res = httpx.post(f"{MCPO_URL}/{tool_name}", json=payload, timeout=30)
+                    res.raise_for_status()
+                    result = res.json()
+                    return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+                except Exception as e:
+                    # エージェントが失敗を認識してユーザーに伝えられるよう、例外は文字列で返す
+                    return f"ツール実行エラー: {e}"
+            return call
+
+        tools.append(
+            StructuredTool.from_function(
+                func=make_caller(name),
+                name=name,
+                description=description,
+                args_schema=args_schema,
+            )
+        )
+    return tools
+
+
+# エージェントは初回リクエスト時に組み立ててキャッシュする。
+# （compose起動直後はmcpoが立ち上がり中のことがあるため、起動時ではなく遅延生成にする）
+_agent_cache: dict = {"agent": None}
+
+
+def get_agent():
+    if _agent_cache["agent"] is not None:
+        return _agent_cache["agent"]
+    tools = [NOTE_SEARCH_TOOL]
+    try:
+        mcpo_tools = fetch_mcpo_tools()
+        tools += mcpo_tools
+        logging.info(f"[agent] mcpoツール取得: {[t.name for t in mcpo_tools]}")
+        _agent_cache["agent"] = create_agent(llm, tools)
+    except Exception as e:
+        # mcpoに届かない間はノート検索だけで動く（キャッシュせず次のリクエストで再試行）
+        logging.error(f"[agent] mcpoツール取得失敗（note_searchのみで応答）: {e}")
+        return create_agent(llm, tools)
+    return _agent_cache["agent"]
+
+
+# ---------------------------------------------------------------------------
+# プロンプト組み立て
+# ---------------------------------------------------------------------------
+
+_WEEKDAYS_JA = "月火水木金土日"
+
+
+def build_system_prompt() -> str:
+    now = datetime.now()
+    today = f"{now.year}年{now.month}月{now.day}日（{_WEEKDAYS_JA[now.weekday()]}曜日）{now.strftime('%H:%M')}"
+    weather_info = get_today_weather()
+    weather_line = f"今日の天気: {weather_info}\n" if weather_info else ""
+    return (
+        "あなたはユーザー専属のAI秘書です。日本語で簡潔に答えてください。\n\n"
+        f"現在の日時: {today}\n"
+        "「明日」「来週」などの相対的な日付は、この日時を基準に計算してください。\n"
+        f"{weather_line}\n"
+        "道具の使い方:\n"
+        "- ユーザーのノートやメモ・過去の記録に関する質問には note_search を使う\n"
+        "- カレンダーの予定の追加・確認・変更・削除には calendar_* の道具を使う\n"
+        "- 削除・変更で候補が複数返ってきたら、勝手に選ばずユーザーに確認する\n"
+        "- 道具の結果を踏まえて、最後は必ず自然な日本語で答える\n"
+        "- 道具が不要な雑談や一般的な質問には、道具を使わずそのまま答える"
+    )
+
+
+def to_langchain_messages(req: ChatRequest) -> list:
+    """Open WebUIからのOpenAI形式メッセージをLangChain形式に変換する。
+    こちらのシステムプロンプトを先頭に置き、履歴は直近MAX_HISTORY件まで保持する。"""
+    messages: list = [SystemMessage(content=build_system_prompt())]
+    history = [m for m in req.messages if m.content]
+    for m in history[-MAX_HISTORY:]:
+        if m.role == "system":
+            messages.append(SystemMessage(content=m.content))
+        elif m.role == "assistant":
+            messages.append(AIMessage(content=m.content))
+        else:
+            messages.append(HumanMessage(content=m.content))
+    return messages
 
 
 def get_today_weather() -> str | None:
@@ -133,6 +242,25 @@ def get_today_weather() -> str | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# OpenAI互換エンドポイント
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/models")
+def list_models():
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "personal-ai",
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "ollama",
+            }
+        ],
+    }
+
+
 @app.post("/v1/chat/completions")
 def chat_completions(req: ChatRequest):
     user_message = next(
@@ -144,24 +272,38 @@ def chat_completions(req: ChatRequest):
         logging.info("[SKIP] フォローアップ質問生成リクエストをスキップ")
         return StreamingResponse(iter(["data: [DONE]\n\n"]), media_type="text/event-stream")
 
-    logging.info(f"[1] Open WebUI からリクエスト受信: 「{user_message[:100]}」")
-    logging.info(f"[2] ChromaDB で関連情報を検索中...")
+    logging.info(f"[req] 「{user_message[:100]}」（履歴 {len(req.messages)} 件）")
+    agent = get_agent()
+    lc_messages = to_langchain_messages(req)
+    chunk_id = f"chatcmpl-{uuid.uuid4().hex}"
 
-    nodes = retriever.retrieve(user_message)
-    context = "\n\n".join([node.get_content() for node in nodes])
+    def sse(content: str) -> str:
+        chunk = {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "choices": [{"delta": {"content": content}, "index": 0, "finish_reason": None}],
+        }
+        return f"data: {json.dumps(chunk)}\n\n"
 
-    weather_info = get_today_weather()
-    weather_prefix = f"【今日の天気】{weather_info}\n\n" if weather_info else ""
-    if weather_info:
-        logging.info(f"[天気] プロンプトに追加: {weather_info}")
+    def generate():
+        try:
+            # stream_mode="messages": エージェント内のLLMトークンとツール結果が逐次流れてくる
+            for chunk, _meta in agent.stream(
+                {"messages": lc_messages},
+                config={"recursion_limit": 10},  # 道具の呼びすぎ暴走を防ぐ上限
+                stream_mode="messages",
+            ):
+                if isinstance(chunk, AIMessageChunk):
+                    for tc in chunk.tool_call_chunks:
+                        if tc.get("name"):
+                            logging.info(f"[tool] 呼び出し: {tc['name']} {tc.get('args') or ''}")
+                    if isinstance(chunk.content, str) and chunk.content:
+                        yield sse(chunk.content)
+                elif isinstance(chunk, ToolMessage):
+                    logging.info(f"[tool] {chunk.name} 結果: {str(chunk.content)[:200]}")
+        except Exception as e:
+            logging.exception("[agent] 実行エラー")
+            yield sse(f"（エラーが発生しました: {e}）")
+        yield "data: [DONE]\n\n"
 
-    if context.strip():
-        logging.info(f"[3] 関連情報あり → RAGプロンプトで Ollama にストリーミング")
-        prompt = f"{weather_prefix}参考情報:\n{context}\n\n質問: {user_message}"
-    else:
-        logging.info(f"[3] 関連情報なし → そのまま Ollama にストリーミング")
-        prompt = f"{weather_prefix}{user_message}"
-
-    logging.info(f"[4] Ollama にストリーミング開始...")
-    logging.info(f"[prompt]\n{prompt}")
-    return _stream_ollama(prompt, req)
+    return StreamingResponse(generate(), media_type="text/event-stream")

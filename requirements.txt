@@ -137,6 +137,9 @@ uvicorn==0.48.0
 uvloop==0.22.1
 watchfiles==1.2.0
 websocket-client==1.9.0
-websockets==16.0
+websockets>=14,<16  # langgraph-sdkが<16を要求するため16.0から緩めた
 wrapt==2.2.1
 yarl==1.24.2
+langchain
+langchain-ollama
+langgraph
