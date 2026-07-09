@@ -36,6 +36,7 @@ try:
 except ImportError:
     from langgraph.prebuilt import create_react_agent as create_agent
 
+from src import wake_time
 from src.weather_fetch import get_location, get_weather
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -95,6 +96,43 @@ NOTE_SEARCH_TOOL = StructuredTool.from_function(
     description=(
         "ユーザーの個人データ（Obsidianのノート・保存した画像の内容・カレンダーの予定の記録）から"
         "関連情報を検索する。ユーザー自身のメモ・記録・過去の予定に関する質問で使う"
+    ),
+)
+
+def set_wake_time(date: str, time: str) -> str:
+    """指定日の起床時刻（目覚まし）を手動設定・解除する"""
+    try:
+        return wake_time.set_override(date, time)
+    except ValueError:
+        return "形式が不正です。date=YYYY-MM-DD、time=HH:MM（解除は'auto'）で指定してください"
+
+
+def get_wake_time(date: str) -> str:
+    """指定日の起床時刻（目覚まし）を確認する"""
+    try:
+        target = datetime.strptime(date, "%Y-%m-%d").date()
+    except ValueError:
+        return "形式が不正です。date=YYYY-MM-DDで指定してください"
+    info = wake_time.compute_wake_time(target)
+    return f"{info['date']} の起床時刻は {info['wake_time']} です（理由: {info['reason']}）"
+
+
+SET_WAKE_TOOL = StructuredTool.from_function(
+    func=set_wake_time,
+    name="set_wake_time",
+    description=(
+        "目覚まし（起床時刻）を手動で設定する。「明日は7時に起きる」「明日7時に起こして」などで使う。"
+        "dateはYYYY-MM-DD形式、timeはHH:MM形式。"
+        "「やっぱりカレンダー通りでいい」と言われたらtimeに'auto'を渡すと解除できる"
+    ),
+)
+
+GET_WAKE_TOOL = StructuredTool.from_function(
+    func=get_wake_time,
+    name="get_wake_time",
+    description=(
+        "目覚まし（起床時刻）が何時にセットされる予定かを確認する。"
+        "「明日何時に起きる？」「明日の目覚まし何時？」などで使う。dateはYYYY-MM-DD形式"
     ),
 )
 
@@ -165,7 +203,7 @@ _agent_cache: dict = {"agent": None}
 def get_agent():
     if _agent_cache["agent"] is not None:
         return _agent_cache["agent"]
-    tools = [NOTE_SEARCH_TOOL]
+    tools = [NOTE_SEARCH_TOOL, SET_WAKE_TOOL, GET_WAKE_TOOL]
     try:
         mcpo_tools = fetch_mcpo_tools()
         tools += mcpo_tools
@@ -198,6 +236,8 @@ def build_system_prompt() -> str:
         "道具の使い方:\n"
         "- ユーザーのノートやメモ・過去の記録に関する質問には note_search を使う\n"
         "- カレンダーの予定の追加・確認・変更・削除には calendar_* の道具を使う\n"
+        "- 目覚まし・起床時刻の設定（「明日は7時に起きる」など）には set_wake_time を使う。"
+        "何時に起きるかの確認には get_wake_time を使う\n"
         "- 重要: カレンダーを操作するときは、必ず該当する道具を実際に呼び出すこと。"
         "道具を呼ばずに「追加しました」「変更しました」「削除しました」と答えることは絶対に禁止\n"
         "- 削除・変更で候補が複数返ってきたら、勝手に選ばずユーザーに確認する\n"
@@ -248,6 +288,19 @@ def get_today_weather() -> str | None:
 # ---------------------------------------------------------------------------
 # OpenAI互換エンドポイント
 # ---------------------------------------------------------------------------
+
+@app.get("/wake_time")
+def wake_time_endpoint(date: str | None = None):
+    """iPhoneショートカットが毎晩叩く起床時刻API。
+    dateを省略すると、正午以降なら「明日」・午前中なら「今日」を対象にする。"""
+    if date:
+        target = datetime.strptime(date, "%Y-%m-%d").date()
+    else:
+        target = wake_time.default_target_date()
+    info = wake_time.compute_wake_time(target)
+    logging.info(f"[wake_time] {info}")
+    return info
+
 
 @app.get("/v1/models")
 def list_models():

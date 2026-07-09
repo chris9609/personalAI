@@ -14,6 +14,8 @@ services:
       # 夜間バッチ(ホスト側)が更新したRAGデータをそのまま読む。
       # ChromaDBはsqlite書き込みがあるためro指定はしない
       - ./chroma_db:/app/chroma_db
+      # 起床時刻の手動オーバーライド(wake_override.json)の保存先
+      - ./data:/app/data
     restart: always
 
   open-webui:
