@@ -19,8 +19,11 @@
   .venv/bin/python -m batch.auto_link            # 実際に書き込む
   .venv/bin/python -m batch.auto_link --dry-run  # 類似度と予定だけ表示
 """
+import errno
 import re
+import subprocess
 import sys
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -104,9 +107,27 @@ def build_block(links: list[tuple[str, float]]) -> str:
     return f"{BLOCK_START}\n## 関連\n{lines}\n{BLOCK_END}"
 
 
-def update_note(vault_path: Path, links: list[tuple[str, float]]) -> bool:
+def read_vault_note(vault_path: Path, retries: int = 3) -> str | None:
+    """vaultのノートを読む。iCloud未ダウンロードで読めなければ None。
+
+    iCloudが中身をクラウドにだけ置いている（dataless）ファイルは、読むと
+    OSError(EDEADLK) で即失敗することがある（2026-09-27〜29の夜間バッチで発生。
+    obsidian_sync の 2026-07-06 と同じ現象）。brctl でダウンロードを依頼して待ち、
+    それでも駄目なら呼び出し側でその1件だけ飛ばす。
+    """
+    for attempt in range(retries):
+        try:
+            return vault_path.read_text(encoding="utf-8")
+        except OSError as e:
+            if e.errno != errno.EDEADLK:
+                raise
+            subprocess.run(["brctl", "download", str(vault_path)], capture_output=True)
+            time.sleep(2 * (attempt + 1))
+    return None
+
+
+def update_note(vault_path: Path, original: str, links: list[tuple[str, float]]) -> bool:
     """末尾の関連ブロックを最新に置き換える。ファイルを変更したら True"""
-    original = vault_path.read_text(encoding="utf-8")
     body = BLOCK_RE.sub("", original).rstrip()
     updated = f"{body}\n\n{build_block(links)}\n" if links else f"{body}\n"
     if updated == original:
@@ -127,7 +148,7 @@ def main() -> int:
         return 1
     print(f"対象: {len(notes)} ノート")
 
-    updated = unchanged = missing = 0
+    updated = unchanged = missing = pending = 0
     for rel, links in related_notes(notes, center).items():
         vault_path = VAULT_DIR / rel
         if not vault_path.is_file():
@@ -139,14 +160,21 @@ def main() -> int:
             shown = ", ".join(f"{Path(b).stem}({sim:.2f})" for b, sim in links) or "（関連なし）"
             print(f"[dry-run] {rel} → {shown}")
             continue
-        if update_note(vault_path, links):
+        original = read_vault_note(vault_path)
+        if original is None:
+            # 関連リンクは翌晩付け直せば足りるので、この1件のためにバッチ全体を止めない
+            print(f"[保留] iCloud未ダウンロードのため読めません（次回に再試行）: {rel}")
+            pending += 1
+            continue
+        if update_note(vault_path, original, links):
             print(f"[更新] {rel} → {len(links)} 件")
             updated += 1
         else:
             unchanged += 1
 
     if not dry_run:
-        print(f"完了: {updated} 件更新 / {unchanged} 件変更なし / {missing} 件スキップ")
+        print(f"完了: {updated} 件更新 / {unchanged} 件変更なし / {missing} 件スキップ"
+              + (f" / {pending} 件保留" if pending else ""))
     return 0
 
 
