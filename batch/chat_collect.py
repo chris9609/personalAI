@@ -117,6 +117,16 @@ def summarize(chat: dict) -> dict:
     return json.loads(res.json()["message"]["content"])
 
 
+def _as_items(value) -> list[str]:
+    # LLMは指示どおりの形で返すとは限らない（入れ子リスト・文字列単体など）ので平らな文字列リストに正規化
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [item for v in value for item in _as_items(v)]
+    text = str(value).strip()
+    return [text] if text else []
+
+
 def render_note(chat: dict, summary: dict) -> str:
     created = datetime.fromtimestamp(chat["created_at"])
     lines = [
@@ -128,12 +138,12 @@ def render_note(chat: dict, summary: dict) -> str:
         "",
         f"# {chat['title']}",
         "",
-        summary.get("summary", "").strip(),
+        " ".join(_as_items(summary.get("summary"))),
     ]
     for key, heading in [("decisions", "📌 決めたこと"),
                          ("learnings", "💡 学んだこと"),
                          ("todos", "📝 宿題・次にやること")]:
-        items = [s.strip() for s in summary.get(key, []) if str(s).strip()]
+        items = _as_items(summary.get(key))
         if items:
             lines += ["", f"## {heading}"]
             lines += [f"- {item}" for item in items]
