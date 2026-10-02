@@ -42,7 +42,7 @@ services:
     environment:
       # 小型モデル(gemma)が迷わないよう、見せるサービスを絞る。
       # 武器を増やすときはここにカンマ区切りで足して再起動
-      - TOOLS=gcal,anki
+      - TOOLS=gcal,anki,slack
       # AnkiはMac本体で動いているので、コンテナからはhost.docker.internal経由で届かせる
       # （既定の127.0.0.1だとコンテナ自身を指してしまう）
       - ANKI_CONNECT_URL=http://host.docker.internal:8765

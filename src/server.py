@@ -5,7 +5,7 @@ Open WebUI から使えるOpenAI互換APIサーバー（LangGraphエージェン
 構成:
   Open WebUI → このサーバー → LangGraphエージェント(gemma)
                                 ├─ note_search（LlamaIndex RAG: ノート・画像・カレンダー取り込みデータ）
-                                └─ calendar_* / anki_*（mcpo経由でpersonal-mcpのツールを呼ぶ。起動時にopenapi.jsonから自動生成）
+                                └─ calendar_* / anki_* / slack_*（mcpo経由でpersonal-mcpのツールを呼ぶ。起動時にopenapi.jsonから自動生成）
 エージェントが「そのまま答える or 道具を使う」を判断し、道具の結果を踏まえて回答する。
 会話履歴と今日の日付はシステムプロンプトで毎回渡す（旧版は最後の1メッセージしか見ていなかった）。
 """
@@ -262,9 +262,13 @@ def build_system_prompt() -> str:
         "- Ankiの学習状況（今日何枚やったか・残り枚数）の確認には anki_get_review_stats、"
         "カードの検索には anki_find_notes、カードの追加には anki_add_card を使う。"
         "追加先のデッキ名がわからないときは、先に anki_list_decks で実在するデッキ名を確認する\n"
+        "- 「◯時にリマインドして」「◯時に知らせて」には slack_schedule_message を使う"
+        "（チャンネル指定がなければ #秘書室、post_atは「YYYY-MM-DD HH:MM」の日本時間）。"
+        "カレンダーに予定を入れるのとは別物なので、リマインドの依頼で calendar_add_event は使わない\n"
+        "- Slackへの投稿は slack_send_message、チャンネルのメッセージを読むのは slack_read_messages を使う\n"
         "- 目覚まし・起床時刻の設定（「明日は7時に起きる」など）には set_wake_time を使う。"
         "何時に起きるかの確認には get_wake_time を使う\n"
-        "- 重要: カレンダーやAnkiを操作するときは、必ず該当する道具を実際に呼び出すこと。"
+        "- 重要: カレンダー・Anki・Slackを操作するときは、必ず該当する道具を実際に呼び出すこと。"
         "道具を呼ばずに「追加しました」「変更しました」「削除しました」と答えることは絶対に禁止\n"
         "- 削除・変更で候補が複数返ってきたら、勝手に選ばずユーザーに確認する\n"
         "- 道具の結果を踏まえて、最後は必ず自然な日本語で答える\n"
