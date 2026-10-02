@@ -40,9 +40,14 @@ services:
       dockerfile: Dockerfile.mcpo
     command: mcpo --host 0.0.0.0 --port 8600 -- node /mcp/build/index.js
     environment:
-      # 小型モデル(gemma)が迷わないよう、まずはカレンダー2ツールだけ見せる。
-      # 武器を増やすときはここを "gcal,anki" のように編集して再起動
-      - TOOLS=gcal
+      # 小型モデル(gemma)が迷わないよう、見せるサービスを絞る。
+      # 武器を増やすときはここにカンマ区切りで足して再起動
+      - TOOLS=gcal,anki
+      # AnkiはMac本体で動いているので、コンテナからはhost.docker.internal経由で届かせる
+      # （既定の127.0.0.1だとコンテナ自身を指してしまう）
+      - ANKI_CONNECT_URL=http://host.docker.internal:8765
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ../MCP:/mcp:ro
       # コードは homedir 基準でトークンを探すので、コンテナ内ホーム(/root)配下の

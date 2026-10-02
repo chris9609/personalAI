@@ -5,7 +5,7 @@ Open WebUI から使えるOpenAI互換APIサーバー（LangGraphエージェン
 構成:
   Open WebUI → このサーバー → LangGraphエージェント(gemma)
                                 ├─ note_search（LlamaIndex RAG: ノート・画像・カレンダー取り込みデータ）
-                                └─ calendar_*（mcpo経由でpersonal-mcpのツールを呼ぶ。起動時にopenapi.jsonから自動生成）
+                                └─ calendar_* / anki_*（mcpo経由でpersonal-mcpのツールを呼ぶ。起動時にopenapi.jsonから自動生成）
 エージェントが「そのまま答える or 道具を使う」を判断し、道具の結果を踏まえて回答する。
 会話履歴と今日の日付はシステムプロンプトで毎回渡す（旧版は最後の1メッセージしか見ていなかった）。
 """
@@ -22,7 +22,9 @@ import httpx
 import chromadb
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, create_model
+from typing import Annotated
+
+from pydantic import BaseModel, BeforeValidator, Field, create_model
 from llama_index.core import VectorStoreIndex, Settings
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.embeddings.ollama import OllamaEmbedding
@@ -138,6 +140,25 @@ GET_WAKE_TOOL = StructuredTool.from_function(
 
 _JSON_TYPES = {"string": str, "number": float, "integer": int, "boolean": bool}
 
+# mcpoが公開していても、スマホのgemmaには持たせない道具。
+# 取り返しがつかない操作は、確認しながら進められるClaude Code側でだけ使う
+AGENT_TOOL_DENYLIST = {"anki_delete_notes"}
+
+
+def _split_if_str(v):
+    """gemmaは配列を "test,english" のような文字列で渡しがちなので、リストに直して受け取る"""
+    if isinstance(v, str):
+        return [s.strip() for s in v.replace("、", ",").split(",") if s.strip()]
+    return v
+
+
+def _to_py_type(prop: dict):
+    """JSON Schemaの型をPythonの型に変換する。配列は中身の型まで見る（例: タグ=list[str]）"""
+    if prop.get("type") == "array":
+        item_type = _JSON_TYPES.get(prop.get("items", {}).get("type"), str)
+        return Annotated[list[item_type], BeforeValidator(_split_if_str)]
+    return _JSON_TYPES.get(prop.get("type"), str)
+
 
 def fetch_mcpo_tools() -> list[StructuredTool]:
     """mcpoのopenapi.jsonを読んで、公開中のツールをLangChainの道具として自動生成する。
@@ -150,6 +171,8 @@ def fetch_mcpo_tools() -> list[StructuredTool]:
         if not post:
             continue
         name = path.lstrip("/")
+        if name in AGENT_TOOL_DENYLIST:
+            continue
         description = (post.get("description") or post.get("summary") or name).strip()
 
         body = (
@@ -163,7 +186,7 @@ def fetch_mcpo_tools() -> list[StructuredTool]:
         required = set(body.get("required", []))
         fields = {}
         for prop_name, prop in body.get("properties", {}).items():
-            py_type = _JSON_TYPES.get(prop.get("type"), str)
+            py_type = _to_py_type(prop)
             desc = prop.get("description", "")
             if prop_name in required:
                 fields[prop_name] = (py_type, Field(description=desc))
@@ -236,9 +259,12 @@ def build_system_prompt() -> str:
         "道具の使い方:\n"
         "- ユーザーのノートやメモ・過去の記録に関する質問には note_search を使う\n"
         "- カレンダーの予定の追加・確認・変更・削除には calendar_* の道具を使う\n"
+        "- Ankiの学習状況（今日何枚やったか・残り枚数）の確認には anki_get_review_stats、"
+        "カードの検索には anki_find_notes、カードの追加には anki_add_card を使う。"
+        "追加先のデッキ名がわからないときは、先に anki_list_decks で実在するデッキ名を確認する\n"
         "- 目覚まし・起床時刻の設定（「明日は7時に起きる」など）には set_wake_time を使う。"
         "何時に起きるかの確認には get_wake_time を使う\n"
-        "- 重要: カレンダーを操作するときは、必ず該当する道具を実際に呼び出すこと。"
+        "- 重要: カレンダーやAnkiを操作するときは、必ず該当する道具を実際に呼び出すこと。"
         "道具を呼ばずに「追加しました」「変更しました」「削除しました」と答えることは絶対に禁止\n"
         "- 削除・変更で候補が複数返ってきたら、勝手に選ばずユーザーに確認する\n"
         "- 道具の結果を踏まえて、最後は必ず自然な日本語で答える\n"
