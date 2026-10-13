@@ -243,7 +243,7 @@ _agent_cache: dict = {"agent": None}
 def get_agent():
     if _agent_cache["agent"] is not None:
         return _agent_cache["agent"]
-    tools = [NOTE_SEARCH_TOOL, SET_WAKE_TOOL, GET_WAKE_TOOL]
+    tools = [NOTE_SEARCH_TOOL, SET_WAKE_TOOL, GET_WAKE_TOOL, TRANSIT_TOOL]
     try:
         mcpo_tools = fetch_mcpo_tools()
         tools += mcpo_tools
