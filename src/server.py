@@ -38,7 +38,7 @@ try:
 except ImportError:
     from langgraph.prebuilt import create_react_agent as create_agent
 
-from src import wake_time
+from src import transit, wake_time
 from src.weather_fetch import get_location, get_weather
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -135,6 +135,23 @@ GET_WAKE_TOOL = StructuredTool.from_function(
     description=(
         "目覚まし（起床時刻）が何時にセットされる予定かを確認する。"
         "「明日何時に起きる？」「明日の目覚まし何時？」などで使う。dateはYYYY-MM-DD形式"
+    ),
+)
+
+def transit_search(destination: str, when: str = "", mode: str = "depart") -> str:
+    """自宅から指定駅までの電車の経路（乗換案内）を検索する"""
+    return transit.search(destination, when, mode)
+
+
+TRANSIT_TOOL = StructuredTool.from_function(
+    func=transit_search,
+    name="transit_search",
+    description=(
+        "自宅から目的の駅までの電車の経路（発着時刻・所要時間・乗換・運賃）を検索する。"
+        "「難波行きたい」「明日9時に梅田に着きたい」などで使う。"
+        "destinationは駅名（例: 難波）。"
+        "whenは時刻で「YYYY-MM-DD HH:MM」形式、今すぐなら空文字。"
+        "modeは出発時刻で探すなら'depart'、「◯時に着きたい」など到着時刻で探すなら'arrive'"
     ),
 )
 
