@@ -15,6 +15,7 @@ import uuid
 import logging
 from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import quote
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 
@@ -155,6 +156,23 @@ TRANSIT_TOOL = StructuredTool.from_function(
     ),
 )
 
+def map_link(place: str, mode: str = "search") -> str:
+    """場所のGoogleマップURLを作る（iPhoneではタップでマップアプリが開く）"""
+    if mode == "route":
+        return f"https://www.google.com/maps/dir/?api=1&destination={quote(place)}"
+    return f"https://www.google.com/maps/search/?api=1&query={quote(place)}"
+
+
+MAP_LINK_TOOL = StructuredTool.from_function(
+    func=map_link,
+    name="map_link",
+    description=(
+        "場所のGoogleマップのリンクを作る。「なんばパークスの地図ちょうだい」などで使う。"
+        "placeは施設名や住所（例: なんばパークス）。"
+        "modeは地図を表示するだけなら'search'、現在地からの道順・ナビなら'route'"
+    ),
+)
+
 _JSON_TYPES = {"string": str, "number": float, "integer": int, "boolean": bool}
 
 # mcpoが公開していても、スマホのgemmaには持たせない道具。
@@ -243,7 +261,7 @@ _agent_cache: dict = {"agent": None}
 def get_agent():
     if _agent_cache["agent"] is not None:
         return _agent_cache["agent"]
-    tools = [NOTE_SEARCH_TOOL, SET_WAKE_TOOL, GET_WAKE_TOOL, TRANSIT_TOOL]
+    tools = [NOTE_SEARCH_TOOL, SET_WAKE_TOOL, GET_WAKE_TOOL, TRANSIT_TOOL, MAP_LINK_TOOL]
     try:
         mcpo_tools = fetch_mcpo_tools()
         tools += mcpo_tools
@@ -288,6 +306,8 @@ def build_system_prompt() -> str:
         "- 電車の経路・乗換案内（「難波行きたい」「明日9時に梅田に着きたい」など）には transit_search を使う。"
         "「◯時に着きたい」「◯時までに」は mode='arrive'、それ以外は mode='depart'。"
         "結果は候補ごとに発着時刻・所要時間・運賃・乗る路線を短くまとめて伝える\n"
+        "- 地図・場所の表示（「なんばパークスの地図ちょうだい」など）には map_link を使う。"
+        "道順・ナビを求められたら mode='route'。返ってきたURLは書き換えずにそのまま伝える\n"
         "- 重要: カレンダー・Anki・Slackを操作するときは、必ず該当する道具を実際に呼び出すこと。"
         "道具を呼ばずに「追加しました」「変更しました」「削除しました」と答えることは絶対に禁止\n"
         "- 削除・変更で候補が複数返ってきたら、勝手に選ばずユーザーに確認する\n"
