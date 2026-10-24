@@ -16,7 +16,8 @@ RapidAPIのBasicプランは各API月500回（ハードリミット）なので�
   - 失敗時は「再試行しないで」とエージェントに伝える文を返す
 
 キーと自宅座標は secrets/navitime.json に {"rapidapi_key": ..., "home": "緯度,経度"}。
-自宅座標がURLに入るので、リクエストURLはログに出さない。
+出発地は origin（iPhoneの現在地 "緯度,経度"）があればそれ、無ければ自宅。
+自宅・現在地の座標がURLに入るので、リクエストURLはログに出さない（httpxのINFOログも止める）。
 """
 import json
 import logging
@@ -25,6 +26,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
+
+# httpxはINFOでリクエストURL（＝自宅・現在地の座標入り）を出すので止める
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 JST = timezone(timedelta(hours=9))
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -170,22 +174,29 @@ def _format_route(no: int, item: dict) -> str:
     return "\n".join(lines)
 
 
-def search(destination: str, when: str = "", mode: str = "depart") -> str:
-    """自宅から destination（駅名）までの経路を検索して、上位候補をテキストで返す。
+def search(destination: str, when: str = "", mode: str = "depart", origin: str = "") -> str:
+    """出発地から destination（駅名）までの経路を検索して、上位候補をテキストで返す。
+    origin（"緯度,経度"）が空なら自宅から。
     mode='arrive' なら when は到着時刻、それ以外は出発時刻として扱う。"""
+    origin = origin.replace(" ", "")
+    start_label = "現在地" if origin else "自宅"
     try:
         key, home = _load_secrets()
+        # 駅の候補選びは自宅基準のまま（キャッシュが駅名単位なので、出発地ごとに変えない）
         station = find_station(destination, key, home)
         time_key = "goal_time" if mode == "arrive" else "start_time"
-        params = {"start": home, "goal": station["coord"], time_key: _normalize_time(when)}
+        params = {"start": origin or home, "goal": station["coord"], time_key: _normalize_time(when)}
         data = _get(ROUTE_HOST, "route_transit", params, key)
     except TransitError as e:
         return f"{e}。{NO_RETRY}"
 
     items = data.get("items", [])
     if not items:
-        return f"自宅から{station['name']}までの経路が見つかりませんでした。{NO_RETRY}"
+        return f"{start_label}から{station['name']}までの経路が見つかりませんでした。{NO_RETRY}"
     label = "到着" if mode == "arrive" else "出発"
-    header = f"自宅 → {station['name']}（{params[time_key][5:16].replace('T', ' ')} {label}で検索）"
+    header = (
+        f"出発地: {start_label}（{'iPhone等の位置情報' if origin else '現在地は取得できていないため自宅から'}）\n"
+        f"{start_label} → {station['name']}（{params[time_key][5:16].replace('T', ' ')} {label}で検索）"
+    )
     routes = [_format_route(i, it) for i, it in enumerate(items[:MAX_ROUTES], 1)]
     return "\n".join([header, *routes])

@@ -11,6 +11,7 @@ Open WebUI から使えるOpenAI互換APIサーバー（LangGraphエージェン
 """
 import os
 import json
+import re
 import uuid
 import logging
 from datetime import date, datetime
@@ -30,6 +31,7 @@ from llama_index.core import VectorStoreIndex, Settings
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.embeddings.ollama import OllamaEmbedding
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from langchain_ollama import ChatOllama
 
@@ -139,16 +141,18 @@ GET_WAKE_TOOL = StructuredTool.from_function(
     ),
 )
 
-def transit_search(destination: str, when: str = "", mode: str = "depart") -> str:
-    """自宅から指定駅までの電車の経路（乗換案内）を検索する"""
-    return transit.search(destination, when, mode)
+def transit_search(destination: str, when: str = "", mode: str = "depart", config: RunnableConfig = None) -> str:
+    """現在地（無ければ自宅）から指定駅までの電車の経路（乗換案内）を検索する"""
+    # 現在地はLLMに座標を写させず、リクエストから抜いたものをconfig経由で受け取る（小型モデルは数字を崩すため）
+    origin = ((config or {}).get("configurable") or {}).get("origin", "")
+    return transit.search(destination, when, mode, origin)
 
 
 TRANSIT_TOOL = StructuredTool.from_function(
     func=transit_search,
     name="transit_search",
     description=(
-        "自宅から目的の駅までの電車の経路（発着時刻・所要時間・乗換・運賃）を検索する。"
+        "現在地（不明なら自宅）から目的の駅までの電車の経路（発着時刻・所要時間・乗換・運賃）を検索する。"
         "「難波行きたい」「明日9時に梅田に着きたい」などで使う。"
         "destinationは駅名（例: 難波）。"
         "whenは時刻で「YYYY-MM-DD HH:MM」形式、今すぐなら空文字。"
@@ -316,6 +320,24 @@ def build_system_prompt() -> str:
     )
 
 
+# Open WebUIの位置情報（設定>インターフェース）をオンにし、システムプロンプトに
+# 「現在地: {{USER_LOCATION}}」と書いておくと「34.669, 135.501 (lat, long)」の形で届く。
+# オフ・取得失敗のときは「Unknown」等になり、マッチしないので自宅扱いになる。
+_LOCATION_RE = re.compile(r"現在地[:：]\s*(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)")
+# LLMには「現在地: …」の行ごと見せない（「Unknown」でも「現在地から」と言い出すため。座標はコードで渡す）
+_LOCATION_LINE_RE = re.compile(r"^現在地[:：].*$\n?", re.MULTILINE)
+
+
+def extract_origin(req: ChatRequest) -> str:
+    """システムメッセージから現在地の "緯度,経度" を取り出す。無ければ空文字。"""
+    for m in req.messages:
+        if m.role == "system" and m.content:
+            match = _LOCATION_RE.search(m.content)
+            if match:
+                return f"{match.group(1)},{match.group(2)}"
+    return ""
+
+
 def to_langchain_messages(req: ChatRequest) -> list:
     """Open WebUIからのOpenAI形式メッセージをLangChain形式に変換する。
     こちらのシステムプロンプトを先頭に置き、履歴は直近MAX_HISTORY件まで保持する。"""
@@ -323,7 +345,9 @@ def to_langchain_messages(req: ChatRequest) -> list:
     history = [m for m in req.messages if m.content]
     for m in history[-MAX_HISTORY:]:
         if m.role == "system":
-            messages.append(SystemMessage(content=m.content))
+            content = _LOCATION_LINE_RE.sub("", m.content).strip()
+            if content:
+                messages.append(SystemMessage(content=content))
         elif m.role == "assistant":
             messages.append(AIMessage(content=m.content))
         else:
@@ -401,6 +425,9 @@ def chat_completions(req: ChatRequest):
     logging.info(f"[req] 「{user_message[:100]}」（履歴 {len(req.messages)} 件）")
     agent = get_agent()
     lc_messages = to_langchain_messages(req)
+    origin = extract_origin(req)
+    # 座標そのものはログに出さない（あり/なしだけ）
+    logging.info(f"[req] 現在地: {'あり' if origin else 'なし（自宅扱い）'}")
     chunk_id = f"chatcmpl-{uuid.uuid4().hex}"
 
     def sse(content: str) -> str:
@@ -416,7 +443,8 @@ def chat_completions(req: ChatRequest):
             # stream_mode="messages": エージェント内のLLMトークンとツール結果が逐次流れてくる
             for chunk, _meta in agent.stream(
                 {"messages": lc_messages},
-                config={"recursion_limit": 10},  # 道具の呼びすぎ暴走を防ぐ上限
+                # recursion_limit: 道具の呼びすぎ暴走を防ぐ上限 / origin: transit_searchへ渡す現在地
+                config={"recursion_limit": 10, "configurable": {"origin": origin}},
                 stream_mode="messages",
             ):
                 if isinstance(chunk, AIMessageChunk):
