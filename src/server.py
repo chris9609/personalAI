@@ -7,7 +7,7 @@ Open WebUI から使えるOpenAI互換APIサーバー（LangGraphエージェン
                                 ├─ note_search（LlamaIndex RAG: ノート・画像・カレンダー取り込みデータ）
                                 └─ calendar_* / anki_* / slack_*（mcpo経由でpersonal-mcpのツールを呼ぶ。起動時にopenapi.jsonから自動生成）
 エージェントが「そのまま答える or 道具を使う」を判断し、道具の結果を踏まえて回答する。
-会話履歴と今日の日付はシステムプロンプトで毎回渡す（旧版は最後の1メッセージしか見ていなかった）。
+会話履歴は毎回渡す（旧版は最後の1メッセージしか見ていなかった）。日時・天気は最後の質問の直前に差し込む（キャッシュを効かせるため）。
 """
 import os
 import json
@@ -48,7 +48,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 CHROMA_DIR = str(BASE_DIR / "chroma_db")
 SECRETS_DIR = BASE_DIR / "secrets"
 COLLECTION_NAME = "personal_rag"
-LLM_MODEL = "gemma4:12b"
+# Ollama公式の gemma4:12b はMLXエンジンで動き、読み込み(prefill)が約235tok/sと遅い。
+# Google公式のGGUF版はllamacppで動き、約3倍速く、プロンプトのキャッシュも効く
+LLM_MODEL = "hf.co/google/gemma-4-12B-it-qat-q4_0-gguf:latest"
 OLLAMA_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 MCPO_URL = os.environ.get("MCPO_BASE_URL", "http://mcpo:8600")
 MAX_HISTORY = 20  # gemmaのコンテキスト溢れ防止。直近20メッセージだけ渡す
@@ -70,7 +72,12 @@ index = VectorStoreIndex.from_vector_store(vector_store)
 retriever = index.as_retriever(similarity_top_k=4)
 
 # temperature=0: 道具を使うか否かの判断がランダムにブレないようにする
-llm = ChatOllama(model=LLM_MODEL, base_url=OLLAMA_URL, temperature=0)
+# keep_alive: 既定の5分だと久々の質問でモデル読み込み(約4秒)からやり直しになるため長めに載せておく
+# reasoning=False: 既定だとgemma4が画面に出ない「考え込み」を数百トークン書き、返事が数倍遅くなるため
+# num_ctx: 既定4096だと「指示＋道具の説明(約2700)＋検索結果」で溢れ、先頭から切り捨てられて
+#          質問ごと消える（ノート検索の答えが自己紹介になっていた原因）
+llm = ChatOllama(model=LLM_MODEL, base_url=OLLAMA_URL, temperature=0, keep_alive="2h",
+                 reasoning=False, num_ctx=16384)
 
 
 class Message(BaseModel):
@@ -92,7 +99,13 @@ def note_search(query: str) -> str:
     nodes = retriever.retrieve(query)
     if not nodes:
         return "関連する情報は見つかりませんでした。"
-    return "\n\n".join(node.get_content() for node in nodes)
+    # 検索は「近い順の上位」を必ず返すので、無関係な文章が混ざる。
+    # 関係なければ「見当たらない」と答えるよう、読み方を添えておく
+    header = (
+        f"【「{query}」でユーザーのノートを検索した結果（関連度順の上位{len(nodes)}件）】\n"
+        "質問に関係する記述がなければ「ノートには見当たりませんでした」と答え、無関係な内容は紹介しないこと。\n"
+    )
+    return header + "\n\n---\n\n".join(node.get_content() for node in nodes)
 
 
 NOTE_SEARCH_TOOL = StructuredTool.from_function(
@@ -286,15 +299,12 @@ _WEEKDAYS_JA = "月火水木金土日"
 
 
 def build_system_prompt() -> str:
-    now = datetime.now()
-    today = f"{now.year}年{now.month}月{now.day}日（{_WEEKDAYS_JA[now.weekday()]}曜日）{now.strftime('%H:%M')}"
-    weather_info = get_today_weather()
-    weather_line = f"今日の天気: {weather_info}\n" if weather_info else ""
+    """毎回同じ中身の指示だけを返す（日時・天気は build_context_message へ）。
+    Ollamaは前回と先頭が同じ部分の読み込みを使い回すので、ここに毎分変わる値を入れると
+    後ろに続く道具の説明(約2000トークン)まで毎回読み直しになる"""
     return (
-        "あなたはユーザー専属のAI秘書です。日本語で簡潔に答えてください。\n\n"
-        f"現在の日時: {today}\n"
-        "「明日」「来週」などの相対的な日付は、この日時を基準に計算してください。\n"
-        f"{weather_line}\n"
+        "あなたはユーザー専属のAI秘書です。日本語で簡潔に答えてください。\n"
+        "「明日」「来週」などの相対的な日付は、質問の直前に渡す現在の日時を基準に計算してください。\n\n"
         "道具の使い方:\n"
         "- ユーザーのノートやメモ・過去の記録に関する質問には note_search を使う\n"
         "- カレンダーの予定の追加・確認・変更・削除には calendar_* の道具を使う\n"
@@ -338,6 +348,15 @@ def extract_origin(req: ChatRequest) -> str:
     return ""
 
 
+def build_context_message() -> str:
+    """毎回変わる情報（日時・天気）。キャッシュを壊さないよう、最後の質問の直前に置く"""
+    now = datetime.now()
+    today = f"{now.year}年{now.month}月{now.day}日（{_WEEKDAYS_JA[now.weekday()]}曜日）{now.strftime('%H:%M')}"
+    weather_info = get_today_weather()
+    weather_line = f"\n今日の天気: {weather_info}" if weather_info else ""
+    return f"現在の日時: {today}{weather_line}"
+
+
 def to_langchain_messages(req: ChatRequest) -> list:
     """Open WebUIからのOpenAI形式メッセージをLangChain形式に変換する。
     こちらのシステムプロンプトを先頭に置き、履歴は直近MAX_HISTORY件まで保持する。"""
@@ -352,6 +371,9 @@ def to_langchain_messages(req: ChatRequest) -> list:
             messages.append(AIMessage(content=m.content))
         else:
             messages.append(HumanMessage(content=m.content))
+    # 日時・天気は最後のユーザー発言の直前に差し込む（先頭側を毎回同じにしてキャッシュを効かせる）
+    last_user = max((i for i, msg in enumerate(messages) if isinstance(msg, HumanMessage)), default=len(messages))
+    messages.insert(last_user, SystemMessage(content=build_context_message()))
     return messages
 
 
