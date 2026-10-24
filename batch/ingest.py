@@ -46,7 +46,10 @@ def main():
         print("既存のdocstoreを読み込みました")
 
     documents = SimpleDirectoryReader(
-        DATA_DIR, recursive=True, required_exts=[".md"], filename_as_id=True
+        DATA_DIR, recursive=True, required_exts=[".md"], filename_as_id=True,
+        # 説明書・契約書の写真から作ったMD(data/screenshots/)はRAGに入れない。
+        # 一度も質問されず、全体の4割を占めてノート検索の邪魔になっていたため（ファイル自体は残す）
+        exclude=["screenshots"],
     ).load_data()
     print(f"{len(documents)} 件のMarkdownを読み込みました")
 
