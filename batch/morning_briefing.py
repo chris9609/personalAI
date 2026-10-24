@@ -1,8 +1,9 @@
 """
-朝ブリーフィング: 今日の予定(Googleカレンダー直API)とAnki残数を #秘書室 に投稿する
+朝ブリーフィング: 今日の予定(Googleカレンダー直API)とAnki残数、Beeminderの状況を #秘書室 に投稿する
 
 ChromaDBは経由しない（会話AI用のRAGとは別経路。毎朝その場でAPIから取る方が新鮮なため）。
 Slackのトークンは personal-mcp 側の .env を共有する（鍵の置き場を1ヶ所にするため）。
+Beeminderは personal-mcp をstdioで直接起動して beeminder_list_goals を呼ぶ（API処理をMCPに一本化）。
 
 設計:
   - Anki未起動は想定内の状態なので、その旨を本文に書くだけで正常終了する
@@ -13,7 +14,9 @@ Slackのトークンは personal-mcp 側の .env を共有する（鍵の置き�
 使い方:
   .venv/bin/python -m batch.morning_briefing
 """
+import asyncio
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -24,6 +27,8 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
 # 天気はOpen WebUI用に作った既存モジュールを再利用する（現在地→OpenWeatherMap）
 from src.weather_fetch import get_location, get_weather
@@ -36,6 +41,9 @@ TOKEN_FILE = str(BASE_DIR / "secrets" / "token.json")
 MCP_ENV_FILE = Path.home() / "claude" / "application" / "MCP" / ".env"
 SLACK_CHANNEL_ID = "C0BEN3MUMPU"  # #秘書室
 ANKI_CONNECT_URL = "http://127.0.0.1:8765"
+# Beeminderは personal-mcp を直接起動して取る（cronはPATHが細いのでnodeは絶対パス）
+MCP_SERVER_JS = Path.home() / "claude" / "application" / "MCP" / "build" / "index.js"
+NODE_BIN = "/opt/homebrew/bin/node"
 JST = timezone(timedelta(hours=9))
 WEEKDAYS_JA = ["月", "火", "水", "木", "金", "土", "日"]
 
@@ -139,6 +147,40 @@ def fetch_anki_summary() -> str:
         return "（Ankiが起動していないため取得できませんでした）"
 
 
+async def call_mcp_tool(services: str, tool: str, arguments: dict | None = None) -> str:
+    # personal-mcp をその場でstdio起動して道具を1つ呼ぶ（Claude Codeと同じ繋ぎ方。Docker/mcpo不要）
+    # 環境変数はそのまま引き継ぐ（キーチェーンを読むのにHOME等が要るため）
+    params = StdioServerParameters(
+        command=NODE_BIN,
+        args=[str(MCP_SERVER_JS)],
+        env={**os.environ, "TOOLS": services},
+    )
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(tool, arguments or {})
+    text = "".join(c.text for c in result.content if c.type == "text")
+    if result.is_error:
+        raise RuntimeError(text)
+    return text
+
+
+def fetch_beeminder_summary() -> str:
+    # 天気と同じくおまけ情報なので、取れなくても注記だけでブリーフィング自体は続行する
+    # APIの叩き方・整形はMCP側に一本化している（並びも脱線が近い順でMCPが返す）
+    try:
+        text = asyncio.run(call_mcp_tool("beeminder", "beeminder_list_goals"))
+        goals = json.loads(text)
+    except Exception:
+        return "（Beeminderの取得に失敗しました）"
+
+    lines = [
+        f"• {g['slug']}: 脱線まで{g['脱線まで']} / 今日の最低ライン {g['今日の最低ライン']}"
+        for g in goals
+    ]
+    return "\n".join(lines)
+
+
 def post_to_slack(text: str):
     token = load_slack_token()
     res = requests.post(
@@ -164,6 +206,7 @@ def main() -> int:
 
     anki_text = fetch_anki_summary()
     weather_text = fetch_weather_summary()
+    beeminder_text = fetch_beeminder_summary()
 
     message = (
         f"☀️ おはようございます。*{date_str}* のブリーフィングです\n"
@@ -172,7 +215,9 @@ def main() -> int:
         f"\n"
         f"📅 *今日の予定*\n{events_text}\n"
         f"\n"
-        f"📚 *Anki*\n{anki_text}"
+        f"📚 *Anki*\n{anki_text}\n"
+        f"\n"
+        f"🐝 *Beeminder*\n{beeminder_text}"
     )
     post_to_slack(message)
     print(f"ブリーフィングを投稿しました（カレンダー{'失敗' if calendar_failed else '成功'}）")
