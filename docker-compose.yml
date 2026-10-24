@@ -5,6 +5,8 @@ services:
       - "8000:8000"
     environment:
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      # コンテナ既定のUTCだと「現在の日時」が9時間ずれ、0〜9時に「明日」が1日ずれるため
+      - TZ=Asia/Tokyo
       # エージェントの道具はmcpo(Docker内線)経由で呼ぶ
       - MCPO_BASE_URL=http://mcpo:8600
     extra_hosts:
