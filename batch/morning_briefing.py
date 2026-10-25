@@ -171,7 +171,9 @@ def fetch_beeminder_summary() -> str:
     try:
         text = asyncio.run(call_mcp_tool("beeminder", "beeminder_list_goals"))
         goals = json.loads(text)
-    except Exception:
+    except Exception as e:
+        # Slackには注記だけ出し、原因はログに残す（10/25 cronでキーチェーンが読めず失敗した際、原因が追えなかったため）
+        print(f"Beeminder取得失敗: {e!r}")
         return "（Beeminderの取得に失敗しました）"
 
     lines = [
