@@ -89,7 +89,7 @@ flowchart TD
     end
 
     subgraph Host["Mac ホスト"]
-        Ollama["Ollama<br/>gemma4 12B (GGUF) / nomic-embed-text"]
+        Ollama["Ollama<br/>gemma4 12B (GGUF) / bge-m3"]
     end
 
     Chroma[("ChromaDB")]
@@ -150,7 +150,7 @@ e4b（実質4B相当）から 12B へ頭脳を替えたら回答は良くなっ�
 | エージェント | LangGraph / LangChain（ReActエージェント + StructuredTool） |
 | RAGフレームワーク | LlamaIndex |
 | ベクトルDB | ChromaDB |
-| LLM実行環境 | Ollama 0.40+（会話: `gemma4 12B`（Google公式GGUF） / バッチ: `gemma4:e4b` / 埋め込み: `nomic-embed-text`） |
+| LLM実行環境 | Ollama 0.40+（会話: `gemma4 12B`（Google公式GGUF） / バッチ: `gemma4:e4b` / 埋め込み: `bge-m3`（日本語に強い多言語モデル）） |
 | ツール連携 | MCP（personal-mcp）+ mcpo（MCP→REST変換） |
 | コンテナ管理 | Docker / docker-compose |
 | リモートアクセス | Tailscale（`tailscale serve` でtailnet内HTTPS。iPhoneの位置情報にはHTTPSが必須） |
@@ -197,7 +197,7 @@ personalAI/
   ```bash
   ollama pull hf.co/google/gemma-4-12B-it-qat-q4_0-gguf  # 会話用LLM（Ollama 0.40以上が必要）
   ollama pull gemma4:e4b                                 # バッチ用LLM
-  ollama pull nomic-embed-text                           # 埋め込み用モデル
+  ollama pull bge-m3                                     # 埋め込み用モデル
   ```
 
 - カレンダー操作ツールを使う場合は、隣のディレクトリに [personal-mcp](../MCP) リポジトリが必要（mcpo サービスがビルドに使用。公開ツールは `docker-compose.yml` の `TOOLS` 環境変数で選択）

@@ -19,7 +19,7 @@ COLLECTION_NAME = "personal_rag"
 
 def main():
     Settings.embed_model = OllamaEmbedding(
-        model_name="nomic-embed-text",
+        model_name="bge-m3",
         base_url="http://localhost:11434",
     )
     Settings.llm = None

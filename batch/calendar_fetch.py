@@ -110,7 +110,7 @@ def events_to_documents(events: list[dict]) -> list[Document]:
 
 def main(past_days: int, future_days: int):
     Settings.embed_model = OllamaEmbedding(
-        model_name="nomic-embed-text",
+        model_name="bge-m3",
         base_url="http://localhost:11434",
     )
     Settings.llm = None

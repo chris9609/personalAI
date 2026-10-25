@@ -16,7 +16,7 @@ LLM_MODEL = "gemma4:e4b"
 
 def main(question: str):
     Settings.embed_model = OllamaEmbedding(
-        model_name="nomic-embed-text",
+        model_name="bge-m3",
         base_url="http://localhost:11434",
     )
     Settings.llm = Ollama(

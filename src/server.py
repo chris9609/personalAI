@@ -62,7 +62,7 @@ app = FastAPI()
 
 # 起動時に一度だけ初期化（RAGの検索は埋め込みモデルだけあればよい）
 Settings.embed_model = OllamaEmbedding(
-    model_name="nomic-embed-text",
+    model_name="bge-m3",
     base_url=OLLAMA_URL,
 )
 chroma_client = chromadb.PersistentClient(path=CHROMA_DIR)
