@@ -25,7 +25,8 @@ DEST_DIR = BASE_DIR / "data" / "obsidian"
 
 # RAGに取り込みたくないフォルダ（vault直下のフォルダ名で指定）
 # private/ にはID・パスワード類を置く運用のため、同期対象から外す
-EXCLUDE_DIRS = {"private"}
+# daily/ はClaudeが毎朝自動生成する時間割なので外す（RAGは自分が書いた/決めたことだけ）
+EXCLUDE_DIRS = {"private", "daily"}
 
 
 def iter_markdown(root: Path):

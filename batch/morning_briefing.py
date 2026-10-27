@@ -183,12 +183,12 @@ def fetch_beeminder_summary() -> str:
     return "\n".join(lines)
 
 
-def post_to_slack(text: str):
+def post_to_slack(text: str, channel: str = SLACK_CHANNEL_ID):
     token = load_slack_token()
     res = requests.post(
         "https://slack.com/api/chat.postMessage",
         headers={"Authorization": f"Bearer {token}"},
-        json={"channel": SLACK_CHANNEL_ID, "text": text},
+        json={"channel": channel, "text": text},
         timeout=10,
     ).json()
     if not res.get("ok"):
