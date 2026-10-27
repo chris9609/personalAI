@@ -56,7 +56,7 @@ SYSTEM_PROMPT = """あなたはユーザーの1日の時間割を組む秘書で
   - [ ] HH:MM〜HH:MM やること（補足）
 - 時間順に並べる。カレンダーの予定もチェックリスト行として入れ、補足に「予定」と書く。
 - Ankiはデッキごとに1行にし、補足に枚数と見積もり時間を書く（例: 復習74枚＋新規20枚・約25分）。
-- 時間の枠を持たないもの（こまめにやるもの）は、合間に短い行として何回か入れる。
+- ノートで「時間割に入れない」とされているものは入れない。
 """
 
 
@@ -158,7 +158,9 @@ def main() -> int:
         return 1
 
     # ひとこと（引用）とチェックリストが1つのブロックに見えないよう空行で区切る
-    plan = plan.replace("\n- [ ] ", "\n\n- [ ] ", 1)
+    # （Claudeが空行を入れてくる日もあるので、一度詰めてから1行だけ空ける）
+    lines = [line for line in plan.splitlines() if line.strip()]
+    plan = "\n\n".join([lines[0], "\n".join(lines[1:])]) if lines[0].startswith(">") else "\n".join(lines)
     title = f"# {now.month}月{now.day}日（{WEEKDAYS_JA[now.weekday()]}）の時間割"
     if dry_run:
         print(f"{title}\n\n{plan}")
