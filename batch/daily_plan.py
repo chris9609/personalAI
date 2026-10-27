@@ -1,10 +1,11 @@
 """
 今日の時間割: vaultの「毎日やること」ノートと今日のカレンダー・Ankiの枚数から、
 Claude Code（claude -p）に時間割を組ませ、vaultの daily/YYYY-MM-DD.md にチェックリストとして書き出す。
-同じ内容を #秘書室 にも投稿する。
+全文は #秘書室 に流さず、朝ブリーフィングにノートへのリンクだけ載せる（情報が多くなりすぎるため）。
+ブリーフィング（8:00）の時点でノートができているよう、こちらは7:50に動かす。
 
 設計:
-  - 入力集め（ノート・カレンダー・Anki）と書き出し（vault・Slack）はPythonが行い、
+  - 入力集め（ノート・カレンダー・Anki）と書き出し（vault）はPythonが行い、
     claude -p には「時間割を組む」ことだけをさせる（道具もMCPも渡さない）。
     launchd下だとMCPの起動やツール許可の確認が沈黙失敗になりやすいため。
   - やることの中身はvault側のノートにだけ書く（このリポジトリはpublicなので、ここには仕組みだけ置く）。
@@ -14,8 +15,8 @@ Claude Code（claude -p）に時間割を組ませ、vaultの daily/YYYY-MM-DD.m
   - その日のノートが既にあれば上書きしない（チェック済みの状態を消さないため）。
 
 使い方:
-  .venv/bin/python -m batch.daily_plan            # 作成して書き出し・投稿
-  .venv/bin/python -m batch.daily_plan --dry-run  # 作成して表示だけ（書き出し・投稿なし）
+  .venv/bin/python -m batch.daily_plan            # 作成してvaultに書き出す
+  .venv/bin/python -m batch.daily_plan --dry-run  # 作成して表示だけ（書き出さない）
 """
 import subprocess
 import sys
@@ -29,6 +30,7 @@ import requests
 from batch.morning_briefing import (
     ANKI_CONNECT_URL,
     JST,
+    DAILY_DIR,
     WEEKDAYS_JA,
     fetch_today_events,
     format_events,
@@ -37,7 +39,6 @@ from batch.morning_briefing import (
 from batch.obsidian_sync import VAULT_DIR
 
 ROUTINE_NOTE = VAULT_DIR / "life" / "毎日やること.md"
-DAILY_DIR = VAULT_DIR / "daily"
 ERROR_CHANNEL_ID = "C0BEQ1A52HX"  # #エラー
 # launchdはPATHが細いので絶対パスで呼ぶ
 CLAUDE_BIN = str(Path.home() / ".local" / "bin" / "claude")
@@ -168,7 +169,6 @@ def main() -> int:
 
     DAILY_DIR.mkdir(exist_ok=True)
     note_path.write_text(f"{title}\n\n{plan}\n", encoding="utf-8")
-    post_to_slack(f"📝 *今日の時間割*（Obsidian: daily/{note_path.name}）\n\n{plan}")
     print(f"時間割を書き出しました: {note_path}")
     return 0
 

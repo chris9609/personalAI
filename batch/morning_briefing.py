@@ -20,6 +20,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import requests
 from google.auth.exceptions import RefreshError
@@ -30,6 +31,7 @@ from googleapiclient.discovery import build
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from batch.obsidian_sync import VAULT_DIR
 # 天気はOpen WebUI用に作った既存モジュールを再利用する（現在地→OpenWeatherMap）
 from src.weather_fetch import get_location, get_weather
 
@@ -46,6 +48,8 @@ MCP_SERVER_JS = Path.home() / "claude" / "application" / "MCP" / "build" / "inde
 NODE_BIN = "/opt/homebrew/bin/node"
 JST = timezone(timedelta(hours=9))
 WEEKDAYS_JA = ["月", "火", "水", "木", "金", "土", "日"]
+# 今日の時間割ノート（batch/daily_plan.py が7:50に作る）の置き場
+DAILY_DIR = VAULT_DIR / "daily"
 
 
 def load_slack_token() -> str:
@@ -183,6 +187,14 @@ def fetch_beeminder_summary() -> str:
     return "\n".join(lines)
 
 
+def daily_plan_link(now: datetime) -> str:
+    # 全文は載せずリンクだけにする（Slackの情報量を増やさないため）。タップするとObsidianで開く
+    if not (DAILY_DIR / f"{now:%Y-%m-%d}.md").exists():
+        return "（今日の時間割はまだ作成されていません）"
+    url = f"obsidian://open?vault={quote(VAULT_DIR.name)}&file={quote(f'daily/{now:%Y-%m-%d}')}"
+    return f"<{url}|Obsidianで開く>"
+
+
 def post_to_slack(text: str, channel: str = SLACK_CHANNEL_ID):
     token = load_slack_token()
     res = requests.post(
@@ -219,7 +231,9 @@ def main() -> int:
         f"\n"
         f"📚 *Anki*\n{anki_text}\n"
         f"\n"
-        f"🐝 *Beeminder*\n{beeminder_text}"
+        f"🐝 *Beeminder*\n{beeminder_text}\n"
+        f"\n"
+        f"📝 *今日の時間割*\n{daily_plan_link(now)}"
     )
     post_to_slack(message)
     print(f"ブリーフィングを投稿しました（カレンダー{'失敗' if calendar_failed else '成功'}）")
