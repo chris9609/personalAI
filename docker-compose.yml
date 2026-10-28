@@ -44,10 +44,14 @@ services:
     environment:
       # 小型モデル(gemma)が迷わないよう、見せるサービスを絞る。
       # 武器を増やすときはここにカンマ区切りで足して再起動
-      - TOOLS=gcal,anki,slack
+      - TOOLS=gcal,anki,slack,github
       # AnkiはMac本体で動いているので、コンテナからはhost.docker.internal経由で届かせる
       # （既定の127.0.0.1だとコンテナ自身を指してしまう）
       - ANKI_CONNECT_URL=http://host.docker.internal:8765
+    # GitHubの道具用の鍵（GITHUB_TOKEN）。コンテナにはghが無いので環境変数で渡す。
+    # gemmaに持たせるので、リポジトリの中身とcommitを読むだけの読み取り専用の鍵にしてある
+    env_file:
+      - ./secrets/github.env
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

@@ -6,7 +6,7 @@ Open WebUI から使えるOpenAI互換APIサーバー（LangGraphエージェン
   Open WebUI → このサーバー → LangGraphエージェント(gemma)
                                 ├─ note_search（LlamaIndex RAG: ノート・画像・カレンダー取り込みデータ）
                                 ├─ claude_code_request（Mac側の受付役 batch/claude_bridge.py 経由でClaude CodeにPRを作らせる）
-                                └─ calendar_* / anki_* / slack_*（mcpo経由でpersonal-mcpのツールを呼ぶ。起動時にopenapi.jsonから自動生成）
+                                └─ calendar_* / anki_* / slack_* / github_*（mcpo経由でpersonal-mcpのツールを呼ぶ。起動時にopenapi.jsonから自動生成）
 エージェントが「そのまま答える or 道具を使う」を判断し、道具の結果を踏まえて回答する。
 会話履歴は毎回渡す（旧版は最後の1メッセージしか見ていなかった）。日時・天気は最後の質問の直前に差し込む（キャッシュを効かせるため）。
 """
@@ -357,6 +357,8 @@ def build_system_prompt() -> str:
         "結果は候補ごとに発着時刻・所要時間・運賃・乗る路線を短くまとめて伝える\n"
         "- 地図・場所の表示（「なんばパークスの地図ちょうだい」など）には map_link を使う。"
         "道順・ナビを求められたら mode='route'。返ってきたURLは書き換えずにそのまま伝える\n"
+        "- GitHubのリポジトリ一覧・最近のcommit（「最近なにやったっけ」「personalAIの最近のcommit見せて」など）には "
+        "github_list_repos / github_list_recent_commits を使う。commit数の集計には github_count_commits を使う\n"
         "- コードの修正・機能追加など開発の依頼（「personalAIの〇〇を直して」など）には claude_code_request を使う。"
         "requestにはユーザーの言葉をそのまま渡す。作業は数分かかり、結果はSlackに届くと伝える。"
         "どのリポジトリか分からないときは、勝手に決めずユーザーに聞く\n"
