@@ -5,6 +5,7 @@ Open WebUI から使えるOpenAI互換APIサーバー（LangGraphエージェン
 構成:
   Open WebUI → このサーバー → LangGraphエージェント(gemma)
                                 ├─ note_search（LlamaIndex RAG: ノート・画像・カレンダー取り込みデータ）
+                                ├─ claude_code_request（Mac側の受付役 batch/claude_bridge.py 経由でClaude CodeにPRを作らせる）
                                 └─ calendar_* / anki_* / slack_*（mcpo経由でpersonal-mcpのツールを呼ぶ。起動時にopenapi.jsonから自動生成）
 エージェントが「そのまま答える or 道具を使う」を判断し、道具の結果を踏まえて回答する。
 会話履歴は毎回渡す（旧版は最後の1メッセージしか見ていなかった）。日時・天気は最後の質問の直前に差し込む（キャッシュを効かせるため）。
@@ -190,6 +191,40 @@ MAP_LINK_TOOL = StructuredTool.from_function(
     ),
 )
 
+# Claude Code への開発依頼は、Mac側の受付役(batch/claude_bridge.py)に投げるだけ。
+# 作業は数分かかるので、ここでは待たずに「受け付けました」を返し、結果(PRのリンク)はSlackに届く
+CLAUDE_BRIDGE_URL = os.environ.get("CLAUDE_BRIDGE_URL", "http://host.docker.internal:8611")
+CLAUDE_BRIDGE_TOKEN_FILE = SECRETS_DIR / "claude_bridge_token"
+
+
+def claude_code_request(repo: str, request: str) -> str:
+    """Claude Codeに開発作業を依頼する（変更してGitHubにPRを出し、Slackに知らせる）"""
+    try:
+        token = CLAUDE_BRIDGE_TOKEN_FILE.read_text(encoding="utf-8").strip()
+        res = httpx.post(
+            f"{CLAUDE_BRIDGE_URL}/request",
+            json={"repo": repo, "request": request},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15,
+        )
+        return res.json()["message"]
+    except Exception as e:
+        logging.error(f"[claude_code_request] 受付役に届かない: {e}")
+        return "Claude Codeの受付役に繋がりませんでした（Macで受付役が止まっている可能性）。再試行しないでください"
+
+
+CLAUDE_CODE_TOOL = StructuredTool.from_function(
+    func=claude_code_request,
+    name="claude_code_request",
+    description=(
+        "Claude Codeに開発作業（コードの修正・機能追加など）を依頼する。"
+        "Claude Codeが変更してGitHubにプルリクエストを出し、終わったらSlackの#秘書室にリンクが届く。"
+        "「personalAIの〇〇を直して」「MCPに××を追加して」などで使う。"
+        "repoはリポジトリ名（例: personalAI, MCP）。"
+        "requestにはユーザーの依頼の言葉を要約や言い換えをせず、そのまま渡す"
+    ),
+)
+
 _JSON_TYPES = {"string": str, "number": float, "integer": int, "boolean": bool}
 
 # mcpoが公開していても、スマホのgemmaには持たせない道具。
@@ -278,7 +313,7 @@ _agent_cache: dict = {"agent": None}
 def get_agent():
     if _agent_cache["agent"] is not None:
         return _agent_cache["agent"]
-    tools = [NOTE_SEARCH_TOOL, SET_WAKE_TOOL, GET_WAKE_TOOL, TRANSIT_TOOL, MAP_LINK_TOOL]
+    tools = [NOTE_SEARCH_TOOL, SET_WAKE_TOOL, GET_WAKE_TOOL, TRANSIT_TOOL, MAP_LINK_TOOL, CLAUDE_CODE_TOOL]
     try:
         mcpo_tools = fetch_mcpo_tools()
         tools += mcpo_tools
@@ -322,6 +357,9 @@ def build_system_prompt() -> str:
         "結果は候補ごとに発着時刻・所要時間・運賃・乗る路線を短くまとめて伝える\n"
         "- 地図・場所の表示（「なんばパークスの地図ちょうだい」など）には map_link を使う。"
         "道順・ナビを求められたら mode='route'。返ってきたURLは書き換えずにそのまま伝える\n"
+        "- コードの修正・機能追加など開発の依頼（「personalAIの〇〇を直して」など）には claude_code_request を使う。"
+        "requestにはユーザーの言葉をそのまま渡す。作業は数分かかり、結果はSlackに届くと伝える。"
+        "どのリポジトリか分からないときは、勝手に決めずユーザーに聞く\n"
         "- 重要: カレンダー・Anki・Slackを操作するときは、必ず該当する道具を実際に呼び出すこと。"
         "道具を呼ばずに「追加しました」「変更しました」「削除しました」と答えることは絶対に禁止\n"
         "- 削除・変更で候補が複数返ってきたら、勝手に選ばずユーザーに確認する\n"
