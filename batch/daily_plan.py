@@ -44,7 +44,18 @@ ERROR_CHANNEL_ID = "C0BEQ1A52HX"  # #エラー
 CLAUDE_BIN = str(Path.home() / ".local" / "bin" / "claude")
 CLAUDE_MODEL = "sonnet"
 # 枚数を数えるデッキ（中身の数字はノート側に書く。ここは数える対象だけ）
-ANKI_DECKS = ["外国語::英語", "SVL12000", "AWS", "クイズ"]
+# キーはノートの表と同じ名前、値は実際に数えるデッキ。
+# 英語は単語の2デッキだけ数える（リスニング・文法・長文は他で勉強しているのでやらない）。
+ENGLISH_WORD_DECKS = [
+    "外国語::英語::単語::4000 Essential English Words",
+    "外国語::英語::単語::TOEIC L＆R TEST 出る単特急　金のフレーズ",
+]
+ANKI_DECKS = {
+    "外国語::英語": ENGLISH_WORD_DECKS,
+    "SVL12000": ["SVL12000"],
+    "AWS": ["AWS"],
+    "クイズ": ["クイズ"],
+}
 ANKI_WAIT_SEC = 90
 
 SYSTEM_PROMPT = """あなたはユーザーの1日の時間割を組む秘書です。
@@ -86,15 +97,16 @@ def fetch_anki_due_counts() -> str:
         return "（Ankiに接続できず、今日の枚数は不明。ノートの平均的な枚数で見積もること）"
 
     lines = []
-    for deck in ANKI_DECKS:
+    for name, decks in ANKI_DECKS.items():
+        deck_query = " OR ".join(f'"deck:{d}"' for d in decks)
         res = requests.post(
             ANKI_CONNECT_URL,
-            json={"action": "findCards", "version": 6, "params": {"query": f'"deck:{deck}" is:due'}},
+            json={"action": "findCards", "version": 6, "params": {"query": f"({deck_query}) is:due"}},
             timeout=10,
         ).json()
         if res.get("error"):
             raise RuntimeError(res["error"])
-        lines.append(f"• {deck}: 今日の期限 {len(res['result'])}枚")
+        lines.append(f"• {name}: 今日の期限 {len(res['result'])}枚")
     return "\n".join(lines)
 
 

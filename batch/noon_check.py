@@ -28,7 +28,7 @@ from datetime import datetime
 
 import requests
 
-from batch.daily_plan import DAILY_DIR, ensure_anki_running
+from batch.daily_plan import DAILY_DIR, ENGLISH_WORD_DECKS, ensure_anki_running
 from batch.morning_briefing import ANKI_CONNECT_URL, JST, post_to_slack
 
 # 例: - [x] 09:35〜09:57 Anki 英語（復習157枚・約22分）
@@ -39,10 +39,7 @@ FOCUS_COUNT = 2
 # 英語は単語の2デッキだけ見る（リスニング・文法・長文は他で勉強しているので数えない）。
 # SAPの新規は親「AWS」の上限0に隠れて親の枚数に出ないので、SAPデッキも見る。
 ANKI_ROW_DECKS = {
-    "英語": [
-        "外国語::英語::単語::4000 Essential English Words",
-        "外国語::英語::単語::TOEIC L＆R TEST 出る単特急　金のフレーズ",
-    ],
+    "英語": ENGLISH_WORD_DECKS,
     "SVL12000": ["SVL12000"],
     "AWS": ["AWS", "AWS::professional::Solutions Architect"],
     "クイズ": ["クイズ"],
