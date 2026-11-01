@@ -75,7 +75,8 @@ def read_tasks(lines: list[str], before_hour: int) -> list[Task]:
             continue
         done, title = m.group(1) != " ", m.group(6)
         start_h, start_m, end_h, end_m = (int(m.group(j)) for j in range(2, 6))
-        if start_h >= before_hour or title.endswith("予定）"):
+        # お昼休憩はチェックするタスクではないので数えない（15:00・18:00で「やること」に出さないため）
+        if start_h >= before_hour or title.endswith("予定）") or title.startswith("お昼休憩"):
             continue
         minutes = (end_h * 60 + end_m) - (start_h * 60 + start_m)
         tasks.append(Task(i, done, f"{start_h:02d}:{start_m:02d} {title}", minutes))
@@ -139,7 +140,7 @@ def left_label(task: Task) -> str:
     return task.label if task.anki_left is None else f"{task.label} → *残り{task.anki_left}枚*"
 
 
-def build_noon_message(tasks: list[Task]) -> str:
+def build_noon_message(tasks: list[Task], is_weekend: bool) -> str:
     total = len(tasks)
     done = sum(1 for t in tasks if t.done)
     left = [t for t in tasks if not t.done]
@@ -150,7 +151,9 @@ def build_noon_message(tasks: list[Task]) -> str:
         head = f"🚨 *午前チェック*：{total}個中 *0個*。午前中、1つも手をつけていません。"
     else:
         head = f"⚠️ *午前チェック*：{total}個中 *{done}個*。終わっていないものがあります。"
-    return f"{head}\n\n{left_text}\n\nお昼のあと、最初にこれを片付けてください。後回しにしないこと。"
+    # 土日はお昼休憩の枠がないので「お昼のあと」とは言わない
+    when = "このあと" if is_weekend else "お昼のあと"
+    return f"{head}\n\n{left_text}\n\n{when}、最初にこれを片付けてください。後回しにしないこと。"
 
 
 def build_focus_message(tasks: list[Task], hour: int) -> str:
@@ -192,7 +195,8 @@ def main() -> int:
     if anki_left is not None and apply_anki(tasks, lines, anki_left) and not dry_run:
         note_path.write_text("\n".join(lines), encoding="utf-8")
 
-    message = build_noon_message(tasks) if hour == CHECK_HOURS[0] else build_focus_message(tasks, hour)
+    is_weekend = now.weekday() >= 5
+    message = build_noon_message(tasks, is_weekend) if hour == CHECK_HOURS[0] else build_focus_message(tasks, hour)
     if anki_left is None:
         message += "\n\n（Ankiに接続できなかったので、Ankiの行はノートのチェックで数えています）"
     if dry_run:
