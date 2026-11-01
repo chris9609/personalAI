@@ -66,6 +66,12 @@ def anki_row_name(label: str) -> str | None:
     return m.group(1) if m and m.group(1) in ANKI_ROW_DECKS else None
 
 
+def is_calendar_event(title: str) -> bool:
+    """補足が「予定」で始まればカレンダー由来の行。
+    LLMが「（予定・終日）」「（予定・締切11/3）」のように書き足すことがあるので、「予定）」で終わるかでは見ない。"""
+    return re.search(r"（予定[^（）]*）$", title) is not None
+
+
 def read_tasks(lines: list[str], before_hour: int) -> list[Task]:
     """before_hour より前に始まるタスクだけ返す。"""
     tasks = []
@@ -76,7 +82,7 @@ def read_tasks(lines: list[str], before_hour: int) -> list[Task]:
         done, title = m.group(1) != " ", m.group(6)
         start_h, start_m, end_h, end_m = (int(m.group(j)) for j in range(2, 6))
         # お昼休憩はチェックするタスクではないので数えない（15:00・18:00で「やること」に出さないため）
-        if start_h >= before_hour or title.endswith("予定）") or title.startswith("お昼休憩"):
+        if start_h >= before_hour or is_calendar_event(title) or title.startswith("お昼休憩"):
             continue
         minutes = (end_h * 60 + end_m) - (start_h * 60 + start_m)
         tasks.append(Task(i, done, f"{start_h:02d}:{start_m:02d} {title}", minutes))
