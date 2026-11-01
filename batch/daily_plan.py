@@ -13,6 +13,7 @@ Claude Code（claude -p）に時間割を組ませ、vaultの daily/YYYY-MM-DD.m
     それでも繋がらなければ枚数不明のまま組ませる（時間割自体は止めない）。
   - 時間割が作れなかった場合は #エラー に通知して exit 1 する。
   - その日のノートが既にあれば上書きしない（チェック済みの状態を消さないため）。
+  - daily/ には今日の1日分だけ残し、書き出せたら前日以前の時間割は消す。
 
 使い方:
   .venv/bin/python -m batch.daily_plan            # 作成してvaultに書き出す
@@ -182,7 +183,18 @@ def main() -> int:
     DAILY_DIR.mkdir(exist_ok=True)
     note_path.write_text(f"{title}\n\n{plan}\n", encoding="utf-8")
     print(f"時間割を書き出しました: {note_path}")
+    remove_old_notes(keep=note_path)
     return 0
+
+
+def remove_old_notes(keep: Path) -> None:
+    """daily/ には今日の1日分だけ残す（毎日1つずつ溜まっていくため）。
+    今日のノートを書き出せたあとに消す（作成に失敗した日に、前日分まで消えてしまわないように）。
+    消すのは日付で始まる .md だけにして、手で置いた別のノートには触らない。"""
+    for path in DAILY_DIR.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*.md"):
+        if path != keep:
+            path.unlink()
+            print(f"古い時間割を削除しました: {path.name}")
 
 
 if __name__ == "__main__":
