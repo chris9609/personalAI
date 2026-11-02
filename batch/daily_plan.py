@@ -14,6 +14,9 @@ Claude Code（claude -p）に時間割を組ませ、vaultの daily/YYYY-MM-DD.m
   - 時間割が作れなかった場合は #エラー に通知して exit 1 する。
   - その日のノートが既にあれば上書きしない（チェック済みの状態を消さないため）。
   - daily/ には今日の1日分だけ残し、書き出せたら前日以前の時間割は消す。
+  - サンダーの試合（「NBA」カレンダー）がある日は、試合終了の1時間前から終了までを
+    NBAを見る時間として渡す（1日1時間まで・終わりに追いつく見方）。試合そのものは
+    予定として渡さない（2時間半ぶん他のことが入らなくなるため）。試合がない日はNBAの枠はなし。
 
 使い方:
   .venv/bin/python -m batch.daily_plan            # 作成してvaultに書き出す
@@ -23,7 +26,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -58,6 +61,10 @@ ANKI_DECKS = {
     "クイズ": ["クイズ"],
 }
 ANKI_WAIT_SEC = 90
+# サンダーの試合だけが入っているカレンダー（ECALで購読。終了時刻は開始＋2時間半で入っている）
+NBA_CALENDAR_ID = "46920ae73c4dbef90de8cc6399499c26069c070fa13abc39aa98669213cc906d@group.calendar.google.com"
+# 1日に見られるのは1時間まで。試合の終わりに合わせて見終わるよう、終了のこの時間前から見る
+NBA_WATCH_MINUTES = 60
 
 SYSTEM_PROMPT = """あなたはユーザーの1日の時間割を組む秘書です。
 渡される「毎日やること」ノートのルールに従い、今日のカレンダーの予定とAnkiの枚数を踏まえて時間割を組んでください。
@@ -111,12 +118,33 @@ def fetch_anki_due_counts() -> str:
     return "\n".join(lines)
 
 
-def build_prompt(now: datetime, routine: str, events_text: str, anki_text: str) -> str:
+def fetch_nba_watch_text() -> str:
+    try:
+        # ECALは「Welcome to the NBA!」のような案内も入れてくるので、サンダーの試合だけに絞る
+        games = [
+            e for e in fetch_today_events(NBA_CALENDAR_ID)
+            if "dateTime" in e["end"] and "Thunder" in e.get("summary", "")
+        ]
+    except Exception as e:
+        return f"（NBAカレンダーの取得に失敗したため不明: {e}。NBAの枠は入れないこと）"
+    if not games:
+        return "今日はサンダーの試合なし。NBAの枠は入れないこと。"
+    lines = []
+    for game in games:
+        end = datetime.fromisoformat(game["end"]["dateTime"]).astimezone(JST)
+        begin = end - timedelta(minutes=NBA_WATCH_MINUTES)
+        summary = game.get("summary", "サンダーの試合").replace("🏀", "").strip()
+        lines.append(f"• {begin:%H:%M}〜{end:%H:%M} NBA（{summary}）※この時間で固定")
+    return "\n".join(lines)
+
+
+def build_prompt(now: datetime, routine: str, events_text: str, anki_text: str, nba_text: str) -> str:
     date_str = f"{now:%Y年%m月%d日}（{WEEKDAYS_JA[now.weekday()]}曜日）"
     return (
         f"今日は {date_str} です。\n\n"
         f"## 毎日やることノート\n{routine}\n\n"
         f"## 今日のカレンダーの予定\n{events_text}\n\n"
+        f"## 今日のNBAを見る時間\n{nba_text}\n\n"
         f"## Ankiの今日の枚数\n{anki_text}\n"
     )
 
@@ -164,7 +192,8 @@ def main() -> int:
             # 予定が分からないと組めないので、空きと決めつけずに不明と伝える
             events_text = f"（カレンダーの取得に失敗したため不明: {e}）"
         anki_text = fetch_anki_due_counts()
-        plan = ask_claude(build_prompt(now, routine, events_text, anki_text))
+        nba_text = fetch_nba_watch_text()
+        plan = ask_claude(build_prompt(now, routine, events_text, anki_text, nba_text))
     except Exception as e:
         print(f"時間割の作成に失敗: {e!r}")
         if not dry_run:

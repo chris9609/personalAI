@@ -80,13 +80,13 @@ def get_calendar_service():
     return build("calendar", "v3", credentials=creds)
 
 
-def fetch_today_events() -> list[dict]:
+def fetch_today_events(calendar_id: str = "primary") -> list[dict]:
     service = get_calendar_service()
     now = datetime.now(JST)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     day_end = day_start + timedelta(days=1)
     result = service.events().list(
-        calendarId="primary",
+        calendarId=calendar_id,
         timeMin=day_start.isoformat(),
         timeMax=day_end.isoformat(),
         singleEvents=True,
