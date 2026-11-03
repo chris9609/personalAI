@@ -3,6 +3,7 @@ ChromaDBに取り込んだ情報に対して質問するスクリプト
 使い方: python src/query.py "質問文"
 """
 import sys
+from pathlib import Path
 import chromadb
 from llama_index.core import VectorStoreIndex
 from llama_index.vector_stores.chroma import ChromaVectorStore
@@ -10,7 +11,8 @@ from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.llms.ollama import Ollama
 from llama_index.core import Settings
 
-CHROMA_DIR = "../chroma_db"
+BASE_DIR = Path(__file__).resolve().parent.parent
+CHROMA_DIR = str(BASE_DIR / "chroma_db")
 COLLECTION_NAME = "personal_rag"
 LLM_MODEL = "gemma4:e4b"
 
