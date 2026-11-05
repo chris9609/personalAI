@@ -1,20 +1,36 @@
 """
 data/ 以下のMarkdownファイルをChromaDBに取り込むスクリプト（upsert対応）
 """
+import re
 from pathlib import Path
 import chromadb
 from llama_index.core import SimpleDirectoryReader, Settings, StorageContext
 from llama_index.core.ingestion import IngestionPipeline, DocstoreStrategy
-from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.node_parser import MarkdownNodeParser, SentenceSplitter
+from llama_index.core.schema import TransformComponent
 from llama_index.core.storage.docstore import SimpleDocumentStore
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.embeddings.ollama import OllamaEmbedding
+
+from batch.auto_link import BLOCK_RE as AUTO_LINK_BLOCK_RE
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = str(BASE_DIR / "data")
 CHROMA_DIR = str(BASE_DIR / "chroma_db")
 PIPELINE_DIR = str(BASE_DIR / "chroma_db" / "pipeline")
 COLLECTION_NAME = "personal_rag"
+HEADING_LINE_RE = re.compile(r"^#+ .*$", re.MULTILINE)
+
+
+class DropHeadingOnlyNodes(TransformComponent):
+    """見出しだけで本文がないチャンクを捨てる。
+
+    `# デプロイと運用` のようなチャンクは話題の言葉だけなので検索上位に来やすいが、
+    答えになる中身がない。見出し自体は配下チャンクの header_path に残るので失われない
+    """
+
+    def __call__(self, nodes, **kwargs):
+        return [n for n in nodes if HEADING_LINE_RE.sub("", n.text).strip()]
 
 
 def main():
@@ -32,7 +48,14 @@ def main():
     pipeline_dir.mkdir(exist_ok=True)
 
     pipeline = IngestionPipeline(
-        transformations=[SentenceSplitter(), Settings.embed_model],
+        # 話題が混ざらないようMarkdownの見出しで分け、長すぎる節だけさらに切る。
+        # 物差し25問（答えの記述を上位4件に含むか）: 18問 → 21問（2026-11-05）
+        transformations=[
+            MarkdownNodeParser(),
+            SentenceSplitter(),
+            DropHeadingOnlyNodes(),
+            Settings.embed_model,
+        ],
         vector_store=vector_store,
         docstore=SimpleDocumentStore(),
         # UPSERTS_AND_DELETE: 入力に存在しなくなったファイル（vaultで削除・移動・除外
@@ -51,6 +74,9 @@ def main():
         # 一度も質問されず、全体の4割を占めてノート検索の邪魔になっていたため（ファイル自体は残す）
         exclude=["screenshots"],
     ).load_data()
+    # auto_link が書き込む関連リンクは自分で書いた内容ではないのでRAGに入れない
+    for doc in documents:
+        doc.set_content(AUTO_LINK_BLOCK_RE.sub("", doc.text))
     print(f"{len(documents)} 件のMarkdownを読み込みました")
 
     nodes = pipeline.run(documents=documents)

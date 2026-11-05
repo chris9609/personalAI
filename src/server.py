@@ -95,6 +95,18 @@ class ChatRequest(BaseModel):
 # エージェントの道具
 # ---------------------------------------------------------------------------
 
+def format_note_result(node) -> str:
+    """検索結果に出典を添える。節単位のチャンクは本文だけだと何のノートか分からないため"""
+    file_name = node.metadata.get("file_name")
+    if not file_name:  # カレンダーなどノート以外は本文がそのまま読める
+        return node.get_content()
+    source = Path(file_name).stem
+    section = node.metadata.get("header_path", "/").strip("/")
+    if section:
+        source = f"{source} > {section.replace('/', ' > ')}"
+    return f"【出典: {source}】\n{node.get_content()}"
+
+
 def note_search(query: str) -> str:
     """ユーザーの個人データを検索する"""
     nodes = retriever.retrieve(query)
@@ -106,7 +118,7 @@ def note_search(query: str) -> str:
         f"【「{query}」でユーザーのノートを検索した結果（関連度順の上位{len(nodes)}件）】\n"
         "質問に関係する記述がなければ「ノートには見当たりませんでした」と答え、無関係な内容は紹介しないこと。\n"
     )
-    return header + "\n\n---\n\n".join(node.get_content() for node in nodes)
+    return header + "\n\n---\n\n".join(format_note_result(node) for node in nodes)
 
 
 NOTE_SEARCH_TOOL = StructuredTool.from_function(
